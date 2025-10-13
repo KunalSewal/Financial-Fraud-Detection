@@ -89,7 +89,29 @@ def preprocess_features(df: pd.DataFrame) -> Tuple[np.ndarray, List[str]]:
     """
     # Select numerical features (excluding FLAG, Index, Address)
     exclude_cols = ["FLAG", "Index", "Address"]
-    feature_cols = [col for col in df.columns if col not in exclude_cols]
+    
+    # Also exclude string/categorical columns
+    # These are token name columns that contain text
+    categorical_patterns = [
+        "token type", "token name", "Address", "ERC20 most sent token type",
+        "ERC20_most_rec_token_type", "ERC20 most rec token type",
+        "ERC20 uniq sent token name", "ERC20 uniq rec token name"
+    ]
+    
+    # Get all columns
+    feature_cols = []
+    for col in df.columns:
+        # Skip if in exclude list
+        if col in exclude_cols:
+            continue
+        # Skip if matches categorical patterns
+        if any(pattern.lower() in col.lower() for pattern in categorical_patterns):
+            continue
+        # Only keep if numeric
+        if pd.api.types.is_numeric_dtype(df[col]):
+            feature_cols.append(col)
+    
+    print(f"Selected {len(feature_cols)} numerical features (excluded {len(df.columns) - len(feature_cols) - 1} non-numerical columns)")
     
     # Handle missing values
     df_features = df[feature_cols].fillna(0)

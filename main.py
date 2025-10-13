@@ -18,9 +18,8 @@ from pathlib import Path
 
 from src.data_utils import load_processed_data, preprocess_ethereum_data
 from src.models import get_model
-from src.train import train_model
+from src.train import train_model, evaluate_model
 from src.evaluate import (
-    evaluate_model,
     plot_confusion_matrix,
     plot_roc_curve,
     plot_training_curves,
@@ -106,6 +105,9 @@ def main(args):
     model_config = config['models'][args.model].copy()
     model_config['input_dim'] = data_dict['num_features']
     
+    # Store use_graph separately (not passed to model constructor)
+    use_graph = model_config.pop('use_graph', True)
+    
     # Initialize model
     print(f"\nInitializing {args.model.upper()} model...")
     model = get_model(args.model, model_config)
@@ -115,7 +117,7 @@ def main(args):
     
     # Training configuration
     train_config = config['training'].copy()
-    train_config['use_graph'] = model_config.get('use_graph', True)
+    train_config['use_graph'] = use_graph
     
     # Setup checkpoint path
     checkpoint_dir = config['paths']['checkpoints']
