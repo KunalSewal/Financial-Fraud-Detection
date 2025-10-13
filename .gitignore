@@ -53,13 +53,13 @@ logs/
 wandb/
 runs/
 
-# Results
-results/*.png
-results/*.jpg
-results/*.pdf
-results/figures/*.png
-results/figures/*.jpg
-results/figures/*.pdf
+# Results - Allow figures to be committed for showcasing
+# results/*.png
+# results/*.jpg
+# results/*.pdf
+# results/figures/*.png
+# results/figures/*.jpg
+# results/figures/*.pdf
 
 # IDE
 .vscode/
