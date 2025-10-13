@@ -1,0 +1,103 @@
+# Experiment Configuration for Financial Fraud Detection
+
+# Dataset configuration
+dataset:
+  name: "ethereum"
+  data_path: "data/transaction_dataset.csv"
+  processed_path: "data/processed/ethereum_processed.pt"
+  test_split: 0.2
+  val_split: 0.1
+  
+# Graph construction
+graph:
+  method: "knn"  # Options: "knn", "threshold"
+  k_neighbors: 10
+  threshold: 0.5
+
+# Model configurations
+models:
+  mlp:
+    input_dim: 50  # Will be set automatically from data
+    hidden_dims: [256, 128, 64]
+    num_classes: 2
+    dropout: 0.3
+    use_graph: false
+    
+  graphsage:
+    input_dim: 50  # Will be set automatically from data
+    hidden_dim: 256
+    num_layers: 2
+    num_classes: 2
+    dropout: 0.3
+    aggregator: "mean"
+    use_graph: true
+    
+  temporal_gnn:
+    input_dim: 50  # Will be set automatically from data
+    hidden_dim: 256
+    num_layers: 2
+    num_classes: 2
+    dropout: 0.3
+    use_graph: true
+    
+  tgn:
+    input_dim: 50  # Will be set automatically from data
+    hidden_dim: 256
+    memory_dim: 256
+    time_dim: 32
+    num_classes: 2
+    dropout: 0.3
+    use_graph: true
+    
+  tgat:
+    input_dim: 50  # Will be set automatically from data
+    hidden_dim: 256
+    num_layers: 2
+    num_heads: 4
+    num_classes: 2
+    dropout: 0.3
+    use_graph: true
+
+# Training configuration
+training:
+  num_epochs: 200
+  learning_rate: 0.001
+  weight_decay: 5.0e-4
+  patience: 30
+  batch_size: 512
+  
+# Evaluation configuration
+evaluation:
+  metrics: ["accuracy", "precision", "recall", "f1", "roc_auc", "avg_precision"]
+  save_predictions: true
+  save_figures: true
+
+# Paths
+paths:
+  checkpoints: "checkpoints/"
+  results: "results/"
+  figures: "results/figures/"
+  logs: "logs/"
+
+# Experiment tracking
+tracking:
+  use_wandb: false
+  project_name: "financial-fraud-detection"
+  entity: null
+  tags: ["fraud-detection", "gnn", "temporal"]
+
+# Hardware configuration
+hardware:
+  device: "cuda"  # Options: "cuda", "cpu", "auto"
+  num_workers: 4
+  pin_memory: true
+  
+# Random seed for reproducibility
+seed: 42
+
+# Logging
+logging:
+  level: "INFO"  # Options: "DEBUG", "INFO", "WARNING", "ERROR"
+  log_interval: 10
+  save_logs: true
+

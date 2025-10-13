@@ -1,0 +1,84 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb_checkpoints/
+
+# Data files (large datasets)
+data/raw/
+data/processed/
+*.csv
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+
+# Exclude the transaction_dataset.csv if it's in the data folder (keep it for now as it's already there)
+!data/transaction_dataset.csv
+
+# Model checkpoints
+*.pt
+*.pth
+*.ckpt
+checkpoints/
+
+# Logs
+logs/
+*.log
+wandb/
+runs/
+
+# Results
+results/*.png
+results/*.jpg
+results/*.pdf
+results/figures/*.png
+results/figures/*.jpg
+results/figures/*.pdf
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.local
+
+# Kaggle credentials
+.kaggle/
+
+# Temporary files
+tmp/
+temp/
