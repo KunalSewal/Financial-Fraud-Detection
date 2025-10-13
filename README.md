@@ -74,7 +74,7 @@ We experiment with three financial fraud datasets of varying scales:
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/YOUR_USERNAME/Financial-Fraud-Detection.git
+git clone https://github.com/KunalSewal/Financial-Fraud-Detection.git
 cd Financial-Fraud-Detection
 ```
 
