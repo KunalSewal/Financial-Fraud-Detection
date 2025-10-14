@@ -25,6 +25,11 @@ venv/
 env/
 ENV/
 
+# Requirements files (keep only main requirements.txt)
+requirements-*.txt
+installed_packages.txt
+pip_freeze.txt
+
 # Jupyter Notebook
 .ipynb_checkpoints
 *.ipynb_checkpoints/
