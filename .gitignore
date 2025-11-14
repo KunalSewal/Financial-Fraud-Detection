@@ -39,16 +39,14 @@ pip_freeze.txt
 *.ipynb_checkpoints/
 
 # Data files (large datasets)
-data/raw/
-data/processed/
-*.csv
-*.h5
-*.hdf5
-*.pkl
-*.pickle
+data/
+!data/Readme.md
+!data/*.py
+!data/preprocessing/
+!data/download_scripts/
 
-# Exclude the transaction_dataset.csv if it's in the data folder (keep it for now as it's already there)
-!data/transaction_dataset.csv
+# Allow small example files if needed
+# !data/transaction_dataset.csv
 
 # Model checkpoints
 *.pt
