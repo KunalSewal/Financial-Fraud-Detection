@@ -1,0 +1,341 @@
+'use client';
+
+import { useState, useEffect, Suspense } from 'react';
+import { motion } from 'framer-motion';
+import useSWR from 'swr';
+import dynamic from 'next/dynamic';
+import PageHeader from '@/components/layout/PageHeader';
+import { api, GraphStructure } from '@/lib/api';
+import {
+  Network,
+  Maximize2,
+  Minimize2,
+  Play,
+  Pause,
+  RotateCcw,
+  ZoomIn,
+  ZoomOut,
+  Download,
+} from 'lucide-react';
+
+// Dynamically import 3D component (client-side only)
+const Graph3D = dynamic(() => import('@/components/graph/Graph3D'), {
+  ssr: false,
+  loading: () => (
+    <div className="flex items-center justify-center h-full">
+      <div className="text-center">
+        <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+        <p className="text-muted-foreground">Loading 3D visualization...</p>
+      </div>
+    </div>
+  ),
+});
+
+export default function GraphVisualization() {
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isRotating, setIsRotating] = useState(true);
+  const [zoom, setZoom] = useState(1);
+  const [selectedNode, setSelectedNode] = useState<number | null>(null);
+  const [sampleSize, setSampleSize] = useState(500);
+
+  // Fetch graph structure from backend
+  const { data: graphData, error, isLoading } = useSWR<GraphStructure>(
+    `/api/graph/structure?sample_size=${sampleSize}`,
+    () => api.getGraphStructure(sampleSize),
+    { refreshInterval: 0 } // Don't auto-refresh for graph data
+  );
+
+  // Calculate stats from graph data
+  const stats = graphData
+    ? {
+        totalNodes: graphData.nodes.length,
+        totalEdges: graphData.edges.length,
+        fraudNodes: graphData.nodes.filter((n) => n.fraud).length,
+        normalNodes: graphData.nodes.filter((n) => !n.fraud).length,
+      }
+    : null;
+
+  const getRiskColor = (risk: string) => {
+    switch (risk) {
+      case 'high':
+        return 'rgb(239, 68, 68)'; // red
+      case 'medium':
+        return 'rgb(251, 191, 36)'; // yellow
+      default:
+        return 'rgb(34, 197, 94)'; // green
+    }
+  };
+
+  const actions = (
+    <div className="flex gap-2">
+      <motion.button
+        whileHover={{ scale: 1.05 }}
+        whileTap={{ scale: 0.95 }}
+        onClick={() => setIsRotating(!isRotating)}
+        className="px-4 py-2 bg-accent hover:bg-accent/80 rounded-lg flex items-center gap-2 transition-colors"
+      >
+        {isRotating ? (
+          <>
+            <Pause className="w-4 h-4" />
+            Pause
+          </>
+        ) : (
+          <>
+            <Play className="w-4 h-4" />
+            Rotate
+          </>
+        )}
+      </motion.button>
+      <motion.button
+        whileHover={{ scale: 1.05 }}
+        whileTap={{ scale: 0.95 }}
+        onClick={() => setIsFullscreen(!isFullscreen)}
+        className="px-4 py-2 bg-accent hover:bg-accent/80 rounded-lg flex items-center gap-2 transition-colors"
+      >
+        {isFullscreen ? (
+          <>
+            <Minimize2 className="w-4 h-4" />
+            Exit
+          </>
+        ) : (
+          <>
+            <Maximize2 className="w-4 h-4" />
+            Fullscreen
+          </>
+        )}
+      </motion.button>
+    </div>
+  );
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="Graph Visualization"
+        description="Interactive 3D visualization of transaction network"
+        breadcrumbs={[{ label: 'Graph Visualization' }]}
+        actions={actions}
+      />
+
+      {/* Stats Cards */}
+      {stats && (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="card"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-muted-foreground">Total Nodes</p>
+                <p className="text-2xl font-bold">
+                  {stats.totalNodes.toLocaleString()}
+                </p>
+              </div>
+              <Network className="w-8 h-8 text-blue-500" />
+            </div>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.1 }}
+            className="card"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-muted-foreground">Total Edges</p>
+                <p className="text-2xl font-bold">
+                  {stats.totalEdges.toLocaleString()}
+                </p>
+              </div>
+              <Network className="w-8 h-8 text-purple-500" />
+            </div>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+            className="card"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-muted-foreground">Fraud Nodes</p>
+                <p className="text-2xl font-bold text-red-500">
+                  {stats.fraudNodes.toLocaleString()}
+                </p>
+              </div>
+              <div className="w-8 h-8 rounded-full bg-red-500/20 flex items-center justify-center">
+                <div className="w-4 h-4 rounded-full bg-red-500" />
+              </div>
+            </div>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+            className="card"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-muted-foreground">Normal Nodes</p>
+                <p className="text-2xl font-bold text-green-500">
+                  {stats.normalNodes.toLocaleString()}
+                </p>
+              </div>
+              <div className="w-8 h-8 rounded-full bg-green-500/20 flex items-center justify-center">
+                <div className="w-4 h-4 rounded-full bg-green-500" />
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Main Graph Visualization */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.4 }}
+        className={`card ${isFullscreen ? 'fixed inset-4 z-50' : ''}`}
+      >
+        {/* Controls */}
+        <div className="flex items-center justify-between mb-4 pb-4 border-b border-border">
+          <div className="flex items-center gap-4">
+            <div>
+              <label className="text-sm text-muted-foreground mr-2">
+                Sample Size:
+              </label>
+              <select
+                value={sampleSize}
+                onChange={(e) => setSampleSize(Number(e.target.value))}
+                className="bg-accent rounded px-3 py-1 text-sm"
+              >
+                <option value={100}>100 nodes</option>
+                <option value={500}>500 nodes</option>
+                <option value={1000}>1000 nodes</option>
+                <option value={2000}>2000 nodes</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setZoom(Math.max(0.5, zoom - 0.1))}
+                className="p-2 bg-accent hover:bg-accent/80 rounded transition-colors"
+                title="Zoom out"
+              >
+                <ZoomOut className="w-4 h-4" />
+              </button>
+              <span className="text-sm text-muted-foreground w-12 text-center">
+                {Math.round(zoom * 100)}%
+              </span>
+              <button
+                onClick={() => setZoom(Math.min(2, zoom + 0.1))}
+                className="p-2 bg-accent hover:bg-accent/80 rounded transition-colors"
+                title="Zoom in"
+              >
+                <ZoomIn className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => setZoom(1)}
+                className="p-2 bg-accent hover:bg-accent/80 rounded transition-colors"
+                title="Reset view"
+              >
+                <RotateCcw className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          <button
+            className="px-4 py-2 bg-accent hover:bg-accent/80 rounded-lg flex items-center gap-2 transition-colors"
+            onClick={() => alert('Export functionality coming soon!')}
+          >
+            <Download className="w-4 h-4" />
+            Export
+          </button>
+        </div>
+
+        {/* Graph Canvas */}
+        <div
+          className="relative bg-background/50 rounded-lg overflow-hidden"
+          style={{ height: isFullscreen ? 'calc(100vh - 200px)' : '600px' }}
+        >
+          {isLoading && (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="text-center">
+                <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+                <p className="text-muted-foreground">Loading graph data...</p>
+              </div>
+            </div>
+          )}
+
+          {error && (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="text-center">
+                <Network className="w-16 h-16 text-red-500 mx-auto mb-4" />
+                <p className="text-red-500 mb-2">Failed to load graph data</p>
+                <p className="text-sm text-muted-foreground">
+                  Make sure the backend is running
+                </p>
+              </div>
+            </div>
+          )}
+
+          {graphData && !isLoading && (
+            <Graph3D 
+              data={graphData} 
+              isRotating={isRotating} 
+              selectedNode={selectedNode}
+              onNodeClick={setSelectedNode}
+            />
+          )}
+        </div>
+
+        {/* Legend */}
+        <div className="mt-4 pt-4 border-t border-border">
+          <p className="text-sm text-muted-foreground mb-2">Legend:</p>
+          <div className="flex flex-wrap gap-4 text-sm">
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 rounded-full bg-red-500" />
+              <span>Fraudulent Transactions</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 rounded-full bg-yellow-500" />
+              <span>Suspicious Activity</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 rounded-full bg-green-500" />
+              <span>Normal Transactions</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-1 h-4 bg-blue-500" />
+              <span>Transaction Flow</span>
+            </div>
+          </div>
+        </div>
+      </motion.div>
+
+      {/* Note about 3D */}
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.5 }}
+        className="card bg-blue-500/10 border-blue-500/20"
+      >
+        <div className="flex items-start gap-3">
+          <Network className="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5" />
+          <div>
+            <h4 className="font-semibold mb-1">3D Visualization Ready</h4>
+            <p className="text-sm text-muted-foreground">
+              The backend API is providing graph structure data with{' '}
+              {stats?.totalNodes.toLocaleString() || 0} nodes. To enable
+              full 3D rendering with React Three Fiber, install:{' '}
+              <code className="bg-accent px-2 py-1 rounded text-xs">
+                npm install @react-three/fiber @react-three/drei three
+              </code>
+            </p>
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+}

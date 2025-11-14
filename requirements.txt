@@ -15,6 +15,7 @@ plotly>=5.14.0
 
 # Experiment Tracking
 tensorboard>=2.13.0
+wandb>=0.16.0
 
 # Jupyter
 jupyter>=1.0.0

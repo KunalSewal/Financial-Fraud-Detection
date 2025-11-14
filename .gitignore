@@ -25,6 +25,10 @@ venv/
 env/
 ENV/
 
+# Node modules
+node_modules/
+package-lock.json
+
 # Requirements files (keep only main requirements.txt)
 requirements-*.txt
 installed_packages.txt

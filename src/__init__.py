@@ -11,13 +11,17 @@ from .data_utils import (
     EthereumFraudDataset
 )
 
-from .models import (
+# Legacy models from legacy_models.py
+from .legacy_models import (
     MLPClassifier,
     GraphSAGE,
     TemporalGNN,
-    TGN,
     TGAT
 )
+
+# New Phase 1 models
+from .models.tgn import TGN
+from .models.mptgnn import MPTGNN
 
 from .train import (
     train_model,
@@ -41,6 +45,7 @@ __all__ = [
     "GraphSAGE",
     "TemporalGNN",
     "TGN",
+    "MPTGNN",
     "TGAT",
     "train_model",
     "train_epoch",
