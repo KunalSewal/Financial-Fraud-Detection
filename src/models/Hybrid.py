@@ -25,7 +25,7 @@ from sklearn.model_selection import train_test_split
 # tgn.py should export: TGNModel, TimeEncoder, MessageFunction, MemoryModule, RawMessageStore, NeighborFinder, TemporalAttentionEmbedding
 # TGAT.py should export: TimeEncoder (or TimeEncoder equivalent), NeighborFinder (if needed), TGATModel
 from tgn import TGNModel  # we will use TGNModel and its internal neighbor finder & memory
-from TGAT import TimeEncoder as TGATTimeEncoder, TGATModel  # alias TGAT TimeEncoder to avoid confusion
+from TGAT import TimeEncoder as TGATTimeEncoder, TGATModel, NeighborFinder as TGATNeighborFinder  # alias TGAT components
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Hybrid run device:", device)
@@ -243,6 +243,11 @@ def build_batch_sequences_from_subgraphs_using_memory(subgraphs: List[dict],
         neighbor_times.append(uniq_times)
 
     Ltot = max((len(lst) for lst in neighbor_lists), default=0)
+    
+    # If no neighbors at all, return empty tensors with single dummy neighbor to avoid attention errors
+    if Ltot == 0:
+        Ltot = 1  # Use at least 1 position to avoid 0-length sequences
+    
     target_feats = torch.zeros(B, mem_dim)
     neigh_feats = torch.zeros(B, Ltot, mem_dim)
     neigh_time_enc = torch.zeros(B, Ltot, 2 * tgat_time_encoder.time_dim)
@@ -258,7 +263,7 @@ def build_batch_sequences_from_subgraphs_using_memory(subgraphs: List[dict],
                 ts = neighbor_times[i][j]
                 neigh_feats[i, j] = memory_tensor[nid].cpu()
                 dt = float(t - ts)
-                neigh_time_enc[i, j] = tgat_time_encoder(torch.tensor(dt).float()).detach()
+                neigh_time_enc[i, j] = tgat_time_encoder(torch.tensor(dt).float().to(tgat_time_encoder.omega.device)).detach().cpu()
                 key_padding_mask[i, j] = False
 
     return target_feats, neigh_feats, neigh_time_enc, key_padding_mask
@@ -277,7 +282,7 @@ def evaluate_hybrid(classifier: HybridFraudClassifier, tgat_model: TGATModel, tg
     with torch.no_grad():
         for i in range(0, len(test_nodes), batch_size):
             batch_nodes = test_nodes[i:i + batch_size]
-            times = [node_timestamp[n] for n in batch_nodes]
+            times = [1.0] * len(batch_nodes)  # Use future time to get all neighbors
             subgraphs = get_recursive_subgraph_from_neighborfinder(neigh_finder, batch_nodes, times, L, k)
             tgt_feats, neigh_feats, neigh_time_enc, key_padding_mask = build_batch_sequences_from_subgraphs_using_memory(
                 subgraphs, memory_tensor, tgat_time_encoder, max_neighbors_total=k * L, L=L
@@ -336,10 +341,15 @@ def train_hybrid(events: List[Tuple[int, int, float, Optional[torch.Tensor]]],
     # Instantiate TGN (for memory + neighbor structure)
     print("Initializing TGN model (memory + raw message store)...")
     tgn_model = TGNModel(num_nodes=num_nodes, mem_dim=mem_dim, msg_dim=msg_dim, edge_dim=edge_dim, time_dim=tgat_time_dim, embed_dim=embed_dim, k=k, device=device_local)
+    
+    # Create separate TGAT NeighborFinder with larger capacity
+    print("Initializing TGAT neighbor finder (separate from TGN)...")
+    tgat_neigh_finder = TGATNeighborFinder(num_nodes=num_nodes, max_neighbors=500)
+    
     # TGAT model: node_feat_dim must equal mem_dim (we use memory as node features)
     print("Initializing TGAT model (will use TGN memory as node features)...")
     tgat_time_encoder = TGATTimeEncoder(time_dim=tgat_time_dim).to(device_local)
-    tgat_model = TGATModel(node_feat_dim=mem_dim, time_dim=tgat_time_dim, embed_dim=embed_dim, n_layers=2).to(device_local)
+    tgat_model = TGATModel(node_feat_dim=mem_dim, time_enc_dim=tgat_time_dim, embed_dim=embed_dim, n_layers=2).to(device_local)
 
     classifier = HybridFraudClassifier(tgn_model, tgat_model, embed_dim=embed_dim).to(device_local)
 
@@ -348,8 +358,9 @@ def train_hybrid(events: List[Tuple[int, int, float, Optional[torch.Tensor]]],
     for i, (src, dst, ts, ef) in enumerate(events):
         if i % 10000 == 0:
             print(f"  Processed {i:,}/{len(events):,} events")
-        # insert in neighborfinder
+        # insert in BOTH neighborfinders (TGN's for memory updates, TGAT's for subgraph sampling)
         tgn_model.neigh_finder.insert_edge(src, dst, ts, ef)
+        tgat_neigh_finder.insert_edge(src, dst, ts, ef)
         # compute raw messages and update memory (simple immediate updates, similar to earlier script)
         src_t = torch.tensor([src], device=device_local)
         dst_t = torch.tensor([dst], device=device_local)
@@ -373,6 +384,14 @@ def train_hybrid(events: List[Tuple[int, int, float, Optional[torch.Tensor]]],
             tgn_model.memory.update_with_messages([int(dst)], raw_msg.detach(), torch.tensor([ts], device=device_local))
 
     print("Streaming complete. TGN memory populated.")
+    
+    # Debug: Check neighbor structure
+    sample_nodes = [0, 100, 1000, 5000]
+    for n in sample_nodes:
+        if n < num_nodes:
+            tgn_neighbors = len(tgn_model.neigh_finder.adj[n])
+            tgat_neighbors = len(tgat_neigh_finder.adj[n])
+            print(f"  Node {n}: TGN={tgn_neighbors} neighbors, TGAT={tgat_neighbors} neighbors")
 
     # Prepare optimizer: train tgat_model, classifier, and optionally fine-tune TGN memory/time encoder
     params = list(tgat_model.parameters()) + list(classifier.parameters()) + list(tgn_model.time_encoder.parameters())
@@ -398,9 +417,16 @@ def train_hybrid(events: List[Tuple[int, int, float, Optional[torch.Tensor]]],
         for i in range(0, len(train_nodes), batch_size):
             batch_nodes = train_nodes[i:i + batch_size]
             batch_labels = torch.tensor([labels[n] for n in batch_nodes], dtype=torch.long, device=device_local)
-            batch_times = [node_timestamp[n] for n in batch_nodes]
-            # build recursive subgraphs using the tgn_model's neighborfinder
-            subgraphs = get_recursive_subgraph_from_neighborfinder(tgn_model.neigh_finder, batch_nodes, batch_times, L, k)
+            # Use max timestamp (1.0) instead of node's own timestamp to get all available neighbors
+            batch_times = [1.0] * len(batch_nodes)  # Use future time to get all neighbors
+            # build recursive subgraphs using the TGAT neighborfinder (not TGN's)
+            subgraphs = get_recursive_subgraph_from_neighborfinder(tgat_neigh_finder, batch_nodes, batch_times, L, k)
+            
+            # Debug first batch
+            if i == 0 and steps == 0:
+                total_neighbors = sum(len(sg['nodes_per_hop'][1]) for sg in subgraphs)
+                print(f"  First batch: {len(batch_nodes)} nodes, total 1-hop neighbors: {total_neighbors}")
+            
             # collect memory tensor (num_nodes x mem_dim)
             memory_tensor = tgn_model.memory.memory  # buffer on device; we will use cpu view for building
             tgt_feats, neigh_feats, neigh_time_enc, key_padding_mask = build_batch_sequences_from_subgraphs_using_memory(
@@ -434,8 +460,8 @@ def train_hybrid(events: List[Tuple[int, int, float, Optional[torch.Tensor]]],
             val_preds = []; val_probs = []
             for i in range(0, len(val_nodes), batch_size):
                 batch_nodes = val_nodes[i:i + batch_size]
-                batch_times = [node_timestamp[n] for n in batch_nodes]
-                subgraphs = get_recursive_subgraph_from_neighborfinder(tgn_model.neigh_finder, batch_nodes, batch_times, L, k)
+                batch_times = [1.0] * len(batch_nodes)  # Use future time to get all neighbors
+                subgraphs = get_recursive_subgraph_from_neighborfinder(tgat_neigh_finder, batch_nodes, batch_times, L, k)
                 memory_tensor = tgn_model.memory.memory
                 tgt_feats, neigh_feats, neigh_time_enc, key_padding_mask = build_batch_sequences_from_subgraphs_using_memory(
                     subgraphs, memory_tensor, tgat_time_encoder, max_neighbors_total=k * L, L=L
@@ -514,7 +540,7 @@ def train_hybrid(events: List[Tuple[int, int, float, Optional[torch.Tensor]]],
     }, save_path)
     print(f"Saved hybrid artifact to {save_path}")
 
-    return classifier, tgat_model, tgn_model.memory, tgn_model.neigh_finder
+    return classifier, tgat_model, tgn_model.memory.memory, tgat_neigh_finder
 
 
 # -------------------------
@@ -523,7 +549,7 @@ def train_hybrid(events: List[Tuple[int, int, float, Optional[torch.Tensor]]],
 if __name__ == "__main__":
     random.seed(0); torch.manual_seed(0); np.random.seed(0)
 
-    csv_path = "data/IBM_dataset/ibm_balanced_10to1.csv"
+    csv_path = "data/ibm/ibm_fraud_29k_nonfraud_60k.csv"
     events, labels, num_nodes, node_timestamp, df = load_ibm_temporal_data(csv_path)
 
     # train/val/test split (70/15/15) stratified by label
@@ -556,7 +582,7 @@ if __name__ == "__main__":
         num_nodes=num_nodes,
         train_mask=train_mask,
         val_mask=val_mask,
-        epochs=20,
+        epochs=5,
         batch_size=256,
         lr=1e-3,
         mem_dim=100,
@@ -570,7 +596,7 @@ if __name__ == "__main__":
 
     # Evaluate on test
     results = evaluate_hybrid(classifier, tgat_model, TGATTimeEncoder(time_dim=16).to(device),
-                              memory_tensor=memory_tensor, neigh_finder=neigh_finder, node_timestamp=node_timestamp,
+                              memory_tensor=classifier.tgn.memory.memory, neigh_finder=neigh_finder, node_timestamp=node_timestamp,
                               labels=labels, test_mask=test_mask, batch_size=256, k=10, L=2)
 
     print("Hybrid training + evaluation finished.")

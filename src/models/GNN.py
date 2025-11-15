@@ -235,7 +235,7 @@ def evaluate_gnn(model, data, test_mask):
 
 if __name__ == "__main__":
     # Path to balanced dataset
-    csv_path = "data/IBM_dataset/ibm_balanced_10to1.csv"
+    csv_path = "data/ibm/ibm_fraud_29k_nonfraud_60k.csv"
 
     # Load graph
     data = load_preprocessed_graph(csv_path)

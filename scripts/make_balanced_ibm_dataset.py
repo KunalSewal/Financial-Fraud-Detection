@@ -1,8 +1,8 @@
 import pandas as pd
 
 # File paths
-input_path = 'data/IBM_dataset/credit_card_transactions-ibm_v2.csv'
-output_path = 'data/IBM_dataset/ibm_fraud_29k_nonfraud_60k.csv'
+input_path = 'data/ibm/card_transaction.v1.csv'
+output_path = 'data/ibm/ibm_fraud_29k_nonfraud_60k.csv'
 
 # Read in chunks to avoid memory issues
 fraud_rows = []

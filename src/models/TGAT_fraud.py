@@ -1,220 +1,384 @@
 """
 TGAT (Temporal Graph Attention) for IBM Credit Card Fraud Detection
-Final corrected version:
- - Uses your TGAT.py API (time_enc_dim, n_heads, dropout)
- - Calls build_batch_sequences_from_subgraphs(..., max_neighbors_per_hop=k, L=L)
- - Unpacks 5 return vals and ignores last (_)
- - Handles zero-neighbor batches in training, validation, and evaluation
- - Avoids duplicate optimizer parameters
+Adapts TGAT model for fraud classification on temporal transaction data.
+
+Key differences from TGN:
+- No memory module (stateless)
+- Uses multi-layer temporal attention
+- Recursive L-hop temporal subgraph sampling
+- Pure attention-based embeddings
 """
 
-import os
-import random
-import time
-from typing import List, Tuple, Optional, Any
-
-import numpy as np
-import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import pandas as pd
+import numpy as np
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 from sklearn.model_selection import train_test_split
+import time
+from typing import List, Tuple, Optional
 
-# Import components from your TGAT.py
-from TGAT import TimeEncoder, NeighborFinder, TGATModel, build_batch_sequences_from_subgraphs
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# Import TGAT components
+from TGAT import (
+    TGATModel, TimeEncoder, NeighborFinder
+)
 
 
 class TGATFraudClassifier(nn.Module):
     """
-    TGAT-based fraud classifier. Wraps TGAT embedding model and an MLP classifier.
+    TGAT-based fraud classifier for transaction nodes.
+    Uses TGAT temporal attention embeddings + MLP classifier.
+    Simplified version that uses node features directly.
     """
-    def __init__(self, tgat_model: TGATModel, embed_dim: int):
+    def __init__(self, tgat_model: TGATModel, embed_dim: int, node_feat_dim: int, device='cpu'):
         super().__init__()
         self.tgat = tgat_model
+        self.device = device
+        self.node_feat_dim = node_feat_dim
+        self.time_dim = 50  # Must match what we pass to TGATModel
+        self.time_encoder = TimeEncoder(time_dim=self.time_dim, learnable=True).to(device)
         self.classifier = nn.Sequential(
             nn.Linear(embed_dim, 64),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(64, 2)
         )
-
-    def forward(self, z: torch.Tensor) -> torch.Tensor:
+    
+    def get_node_embeddings_simple(self, node_ids: List[int], node_features: torch.Tensor, 
+                                   neigh_finder: NeighborFinder, current_time: float, k: int = 10):
+        """
+        Simplified embedding: just use node features + single-hop neighbors.
+        """
+        batch_size = len(node_ids)
+        device = self.device
+        
+        # Get target node features
+        target_feats = node_features[node_ids]  # (B, feat_dim)
+        
+        # Get k nearest neighbors for each node
+        max_neighbors = k
+        neigh_feats_list = []
+        neigh_time_enc_list = []
+        
+        for node_id in node_ids:
+            neighs = neigh_finder.get_prev_neighbors(node_id, current_time, k)
+            
+            if len(neighs) == 0:
+                # No neighbors - use padding
+                neigh_feats = torch.zeros(max_neighbors, self.node_feat_dim, device=device)
+                neigh_time_enc = torch.zeros(max_neighbors, 2 * self.time_dim, device=device)  # Time encoder outputs 2*time_dim
+            else:
+                # Get neighbor features
+                neigh_ids = [n[0] for n in neighs[:max_neighbors]]
+                neigh_times = [n[1] for n in neighs[:max_neighbors]]
+                
+                # Pad if needed
+                while len(neigh_ids) < max_neighbors:
+                    neigh_ids.append(neigh_ids[-1] if neigh_ids else node_id)
+                    neigh_times.append(neigh_times[-1] if neigh_times else current_time)
+                
+                neigh_ids = neigh_ids[:max_neighbors]
+                neigh_times = neigh_times[:max_neighbors]
+                
+                neigh_feats = node_features[neigh_ids].to(device)  # (K, feat_dim)
+                
+                # Time encoding - TimeEncoder outputs 2*time_dim already
+                time_deltas = torch.tensor([current_time - t for t in neigh_times], device=device)
+                neigh_time_enc = self.time_encoder(time_deltas)  # (K, 2*time_dim)
+            
+            neigh_feats_list.append(neigh_feats)
+            neigh_time_enc_list.append(neigh_time_enc)
+        
+        # Stack into batches
+        neigh_feats_padded = torch.stack(neigh_feats_list, dim=0)  # (B, K, feat_dim)
+        neigh_time_enc_padded = torch.stack(neigh_time_enc_list, dim=0)  # (B, K, 2*time_dim)
+        
+        # Create padding mask (all False since we padded manually)
+        key_padding_mask = torch.zeros(batch_size, max_neighbors, dtype=torch.bool, device=device)
+        
+        # Apply TGAT
+        embeddings = self.tgat(target_feats, neigh_feats_padded, neigh_time_enc_padded, key_padding_mask)
+        return embeddings  # (B, embed_dim)
+    
+    def forward(self, node_ids: List[int], node_features: torch.Tensor, 
+                neigh_finder: NeighborFinder, current_time: float = 1.0):
+        """
+        Get fraud predictions for transaction nodes.
+        Returns: logits (B, 2)
+        """
+        z = self.get_node_embeddings_simple(node_ids, node_features, neigh_finder, current_time)
         return self.classifier(z)
 
 
-# -------------------------
-# Data loader / conversion
-# -------------------------
 def load_ibm_temporal_data(csv_path: str):
+    """
+    Load IBM dataset and convert to temporal event format.
+    Returns: events list, node features, labels, num_nodes
+    """
     print(f"Loading data from {csv_path}...")
     df = pd.read_csv(csv_path)
     print(f"Loaded {len(df):,} transactions")
-
-    # Normalize Amount
+    
+    # Convert Amount to float
     if 'Amount' in df.columns:
         df['Amount'] = df['Amount'].replace(r'[\$,]', '', regex=True).astype(float)
-
-    # Map fraud
+    
+    # Map 'Is Fraud?' to binary label
     if 'Is Fraud?' in df.columns:
         df['Fraud_Label'] = df['Is Fraud?'].map({'No': 0, 'Yes': 1})
-    else:
-        raise ValueError("CSV must contain 'Is Fraud?' column")
-
-    df['transaction_id'] = np.arange(len(df)).astype(int)
-
-    # Construct datetimes (use Time if available)
-    if 'Time' in df.columns:
-        def make_datetime(row):
-            try:
-                date_str = f"{int(row['Year']):04d}-{int(row['Month']):02d}-{int(row['Day']):02d} {row['Time']}"
-                return pd.to_datetime(date_str, format='%Y-%m-%d %H:%M', errors='coerce')
-            except Exception:
-                return pd.NaT
-        df['datetime'] = df.apply(make_datetime, axis=1)
-    else:
-        df['datetime'] = pd.to_datetime(df[['Year', 'Month', 'Day']].astype(int).astype(str).agg('-'.join, axis=1),
-                                        format='%Y-%m-%d', errors='coerce')
-
-    n_before = len(df)
-    df = df.dropna(subset=['datetime']).reset_index(drop=True)
-    if len(df) < n_before:
-        print(f"Dropped {n_before - len(df)} rows due to invalid timestamps")
-
-    # Normalize timestamps to [0,1]
-    df['timestamp'] = (df['datetime'] - df['datetime'].min()).dt.total_seconds().astype(float)
-    max_ts = df['timestamp'].max()
-    if max_ts <= 0:
-        raise ValueError("Timestamp max <= 0, check your dates")
-    df['timestamp'] = df['timestamp'] / max_ts
-
-    # Sort and reassign ids
+    
+    # Create unique transaction IDs (node IDs)
+    df['transaction_id'] = np.arange(len(df))
+    
+    # Create timestamp from Year, Month, Day columns
+    df['timestamp'] = pd.to_datetime(
+        df[['Year', 'Month', 'Day']].astype(str).agg('-'.join, axis=1),
+        format='%Y-%m-%d',
+        errors='coerce'
+    )
+    df['timestamp'] = (df['timestamp'] - df['timestamp'].min()).dt.total_seconds()
+    df['timestamp'] = df['timestamp'] / df['timestamp'].max()  # normalize to [0,1]
+    
+    # Sort by timestamp
     df = df.sort_values('timestamp').reset_index(drop=True)
-    df['transaction_id'] = np.arange(len(df)).astype(int)
-    num_nodes = len(df)
-
-    # Build temporal edges (User and Card)
-    events: List[Tuple[int, int, float, Optional[torch.Tensor]]] = []
-    print("Building temporal edges (User and Card)...")
-    for col in ['User', 'Card']:
-        if col not in df.columns:
-            continue
-        for _, group in df.groupby(col):
-            if len(group) <= 1:
-                continue
-            group = group.sort_values('timestamp')
-            idxs = group['transaction_id'].values
-            tss = group['timestamp'].values
-            amounts = group['Amount'].values if 'Amount' in group.columns else np.zeros(len(group))
-            mccs = group['MCC'].values if 'MCC' in group.columns else np.zeros(len(group))
-            for i in range(len(idxs) - 1):
-                src = int(idxs[i])
-                dst = int(idxs[i + 1])
-                ts = float(tss[i + 1])
-                edge_feat = torch.tensor([
-                    float(amounts[i + 1] - amounts[i]),
-                    float(tss[i + 1] - tss[i]),
-                    float(mccs[i + 1]) if len(mccs) > 0 else 0.0
-                ], dtype=torch.float)
-                events.append((src, dst, ts, edge_feat))
-
+    df['transaction_id'] = np.arange(len(df))  # reassign after sort
+    
+    # Create node features (simple: amount, MCC, timestamp)
+    node_features = torch.zeros(len(df), 3)
+    amount_mean = df['Amount'].mean()
+    amount_std = df['Amount'].std()
+    node_features[:, 0] = torch.tensor((df['Amount'] - amount_mean) / amount_std, dtype=torch.float)
+    node_features[:, 1] = torch.tensor(df['MCC'] / df['MCC'].max(), dtype=torch.float)
+    node_features[:, 2] = torch.tensor(df['timestamp'], dtype=torch.float)
+    
+    # Build events: connect transactions by same User or Card
+    events = []
+    
+    print("Building temporal edges...")
+    # Group by User and create edges
+    for user_id, group in df.groupby('User'):
+        indices = group['transaction_id'].values
+        timestamps = group['timestamp'].values
+        amounts = group['Amount'].values
+        mccs = group['MCC'].values
+        
+        for i in range(len(indices) - 1):
+            src = int(indices[i])
+            dst = int(indices[i + 1])
+            ts = float(timestamps[i + 1])
+            # Edge features: amount diff, time diff, MCC
+            edge_feat = torch.tensor([
+                amounts[i + 1] - amounts[i],
+                timestamps[i + 1] - timestamps[i],
+                float(mccs[i + 1])
+            ], dtype=torch.float)
+            events.append((src, dst, ts, edge_feat))
+    
+    # Group by Card and create edges
+    for card_id, group in df.groupby('Card'):
+        indices = group['transaction_id'].values
+        timestamps = group['timestamp'].values
+        amounts = group['Amount'].values
+        mccs = group['MCC'].values
+        
+        for i in range(len(indices) - 1):
+            src = int(indices[i])
+            dst = int(indices[i + 1])
+            ts = float(timestamps[i + 1])
+            edge_feat = torch.tensor([
+                amounts[i + 1] - amounts[i],
+                timestamps[i + 1] - timestamps[i],
+                float(mccs[i + 1])
+            ], dtype=torch.float)
+            events.append((src, dst, ts, edge_feat))
+    
+    # Sort events by timestamp
     events.sort(key=lambda x: x[2])
     print(f"Created {len(events):,} temporal edges")
-
-    labels = df['Fraud_Label'].astype(int).values
-    fraud_count = int(labels.sum())
+    
+    # Extract labels
+    labels = df['Fraud_Label'].values
+    fraud_count = labels.sum()
     print(f"Fraud transactions: {fraud_count:,} ({fraud_count/len(labels)*100:.2f}%)")
+    
+    return events, node_features, labels, len(df)
 
-    node_timestamp = df.set_index('transaction_id')['timestamp'].to_dict()
-    return events, labels, num_nodes, node_timestamp, df
 
-
-# -------------------------
-# Helper to fix zero-neighbor batches
-# -------------------------
-def ensure_nonzero_neighbors(neigh_feats: torch.Tensor, neigh_time_enc: torch.Tensor, key_padding_mask: torch.Tensor,
-                             node_features: nn.Embedding, time_encoder: TimeEncoder):
+def train_tgat_fraud(model: TGATFraudClassifier, events: List[Tuple], node_features: torch.Tensor,
+                     labels: np.ndarray, train_mask: np.ndarray, val_mask: np.ndarray,
+                     epochs: int = 5, batch_size: int = 256, lr: float = 0.001, device='cpu'):
     """
-    If neigh_feats has second dim == 0 (Ltot==0), replace with shape (B,1,feat) and mark it padded.
-    Returns possibly-modified (neigh_feats, neigh_time_enc, key_padding_mask).
+    Train TGAT model for fraud classification.
     """
-    if neigh_feats.shape[1] != 0:
-        return neigh_feats, neigh_time_enc, key_padding_mask
+    model = model.to(device)
+    node_features = node_features.to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
+    criterion = nn.CrossEntropyLoss()
+    
+    print(f"\nTraining on device: {device}")
+    print(f"Using standard CrossEntropyLoss for balanced dataset")
+    
+    best_val_acc = 0
+    best_model_state = None
+    
+    print(f"\nStarting training for {epochs} epochs...")
+    start_time = time.time()
+    
+    # Build neighbor finder from events
+    print("Building temporal neighbor structure...")
+    neigh_finder = NeighborFinder(num_nodes=len(labels), max_neighbors=500)
+    for src, dst, ts, edge_feat in events:
+        neigh_finder.insert_edge(src, dst, ts, edge_feat)
+    print("Neighbor structure built.")
+    
+    # Get train and val node indices
+    train_nodes = np.where(train_mask)[0].tolist()
+    val_nodes = np.where(val_mask)[0].tolist()
+    
+    for epoch in range(epochs):
+        model.train()
+        
+        # Shuffle training nodes
+        np.random.shuffle(train_nodes)
+        
+        epoch_loss = 0
+        num_batches = 0
+        
+        # Mini-batch training
+        for i in range(0, len(train_nodes), batch_size):
+            batch_nodes = train_nodes[i:i + batch_size]
+            batch_labels = torch.tensor([labels[n] for n in batch_nodes], 
+                                       dtype=torch.long, device=device)
+            
+            optimizer.zero_grad()
+            logits = model(batch_nodes, node_features, neigh_finder, current_time=1.0)
+            loss = criterion(logits, batch_labels)
+            
+            if torch.isnan(loss):
+                print(f"Warning: NaN loss at epoch {epoch+1}, batch {num_batches}, skipping")
+                continue
+            
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+            
+            epoch_loss += loss.item()
+            num_batches += 1
+            
+            # Progress update every 100 batches
+            if num_batches % 100 == 0:
+                print(f"  Epoch {epoch+1}/{epochs} | Batch {num_batches}/{len(train_nodes)//batch_size} | Loss: {loss.item():.4f}")
+        
+        avg_loss = epoch_loss / num_batches if num_batches > 0 else 0
+        
+        # Validation every epoch (since we only have 5)
+        if (epoch + 1) % 1 == 0:
+            print(f"\nEpoch {epoch+1}/{epochs} | Loss: {avg_loss:.4f}")
+            print(f"  Validating...")
+            model.eval()
+            with torch.no_grad():
+                # Evaluate on train
+                train_preds = []
+                train_probs = []
+                for i in range(0, len(train_nodes), batch_size):
+                    batch_nodes = train_nodes[i:i + batch_size]
+                    logits = model(batch_nodes, node_features, neigh_finder, current_time=1.0)
+                    probs = F.softmax(logits, dim=1)
+                    preds = logits.argmax(dim=1).cpu().numpy()
+                    probs_fraud = probs[:, 1].cpu().numpy()
+                    train_preds.extend(preds)
+                    train_probs.extend(probs_fraud)
+                train_labels_subset = [labels[n] for n in train_nodes]
+                train_acc = accuracy_score(train_labels_subset, train_preds)
+                train_precision = precision_score(train_labels_subset, train_preds, zero_division=0)
+                train_recall = recall_score(train_labels_subset, train_preds, zero_division=0)
+                train_f1 = f1_score(train_labels_subset, train_preds, zero_division=0)
+                
+                # Evaluate on val
+                val_preds = []
+                val_probs = []
+                for i in range(0, len(val_nodes), batch_size):
+                    batch_nodes = val_nodes[i:i + batch_size]
+                    logits = model(batch_nodes, node_features, neigh_finder, current_time=1.0)
+                    probs = F.softmax(logits, dim=1)
+                    preds = logits.argmax(dim=1).cpu().numpy()
+                    probs_fraud = probs[:, 1].cpu().numpy()
+                    val_preds.extend(preds)
+                    val_probs.extend(probs_fraud)
+                val_labels_subset = [labels[n] for n in val_nodes]
+                val_acc = accuracy_score(val_labels_subset, val_preds)
+                val_precision = precision_score(val_labels_subset, val_preds, zero_division=0)
+                val_recall = recall_score(val_labels_subset, val_preds, zero_division=0)
+                val_f1 = f1_score(val_labels_subset, val_preds, zero_division=0)
+                val_roc_auc = roc_auc_score(val_labels_subset, val_probs) if len(np.unique(val_labels_subset)) > 1 else 0.0
+                
+                if val_acc > best_val_acc:
+                    best_val_acc = val_acc
+                    best_model_state = model.state_dict().copy()
+                    print(f"    ✓ New best validation accuracy!")
+                
+                print(f"    Train - Acc: {train_acc:.4f} | Prec: {train_precision:.4f} | Rec: {train_recall:.4f} | F1: {train_f1:.4f}")
+                print(f"    Val   - Acc: {val_acc:.4f} | Prec: {val_precision:.4f} | Rec: {val_recall:.4f} | F1: {val_f1:.4f} | AUC: {val_roc_auc:.4f}\n")
+    
+    training_time = time.time() - start_time
+    print(f"\nTraining completed in {training_time:.2f}s")
+    
+    # Load best model
+    if best_model_state is not None:
+        model.load_state_dict(best_model_state)
+        print("Loaded best model from validation")
+    
+    return model
 
-    B = neigh_feats.shape[0]
-    feat_dim = node_features.weight.shape[1]
-    # time_enc dim: neigh_time_enc expected shape (B, L, 2*time_encoder.time_dim)
-    time_enc_dim = 2 * time_encoder.time_dim if hasattr(time_encoder, 'time_dim') else (neigh_time_enc.shape[2] if neigh_time_enc.dim() >= 3 else 2 * time_encoder.time_dim)
-    neigh_feats = torch.zeros(B, 1, feat_dim)
-    neigh_time_enc = torch.zeros(B, 1, time_enc_dim)
-    key_padding_mask = torch.ones(B, 1, dtype=torch.bool)
-    return neigh_feats, neigh_time_enc, key_padding_mask
 
-
-# -------------------------
-# Evaluation function (test)
-# -------------------------
-def evaluate_tgat(classifier: TGATFraudClassifier, tgat_model: TGATModel, time_encoder: TimeEncoder,
-                  node_features: nn.Embedding, neigh_finder: NeighborFinder, node_timestamp: dict,
-                  labels: np.ndarray, test_mask: np.ndarray,
-                  batch_size: int = 256, k: int = 10, L: int = 2):
-    classifier.eval()
-    tgat_model.eval()
-    time_encoder.eval()
-
+def evaluate_tgat_fraud(model: TGATFraudClassifier, node_features: torch.Tensor,
+                        neigh_finder: NeighborFinder, labels: np.ndarray, 
+                        test_mask: np.ndarray, batch_size: int = 256, device='cpu'):
+    """
+    Evaluate TGAT fraud classifier on test set.
+    """
+    print("\nEvaluating on test set...")
+    model.eval()
+    node_features = node_features.to(device)
     test_nodes = np.where(test_mask)[0].tolist()
+    
     all_preds = []
     all_probs = []
-
+    
     with torch.no_grad():
         for i in range(0, len(test_nodes), batch_size):
+            if i % (batch_size * 10) == 0:
+                print(f"  Processed {i:,}/{len(test_nodes):,} test samples...")
+            
             batch_nodes = test_nodes[i:i + batch_size]
-            batch_times = [node_timestamp[n] for n in batch_nodes]
-            subgraphs = neigh_finder.get_recursive_subgraph(batch_nodes, batch_times, L, k)
-
-            tgt_feats, neigh_feats, neigh_time_enc, key_padding_mask, _ = build_batch_sequences_from_subgraphs(
-                subgraphs, node_features.weight.cpu(), time_encoder, max_neighbors_per_hop=k, L=L
-            )
-
-            # fix zero-neighbor batches
-            neigh_feats, neigh_time_enc, key_padding_mask = ensure_nonzero_neighbors(
-                neigh_feats, neigh_time_enc, key_padding_mask, node_features, time_encoder
-            )
-
-            tgt_feats = tgt_feats.to(device)
-            neigh_feats = neigh_feats.to(device)
-            neigh_time_enc = neigh_time_enc.to(device)
-            key_padding_mask = key_padding_mask.to(device)
-
-            z = tgat_model(tgt_feats, neigh_feats, neigh_time_enc, key_padding_mask)  # (B, embed_dim)
-            logits = classifier(z)
+            logits = model(batch_nodes, node_features, neigh_finder, current_time=1.0)
             probs = F.softmax(logits, dim=1)
             preds = logits.argmax(dim=1).cpu().numpy()
             probs_fraud = probs[:, 1].cpu().numpy()
-
-            all_preds.extend(preds.tolist())
-            all_probs.extend(probs_fraud.tolist())
-
-    test_nodes_list = test_nodes
-    test_labels = [labels[n] for n in test_nodes_list]
+            
+            all_preds.extend(preds)
+            all_probs.extend(probs_fraud)
+    
+    test_labels = [labels[n] for n in test_nodes]
+    
+    # Compute metrics
     acc = accuracy_score(test_labels, all_preds)
     precision = precision_score(test_labels, all_preds, zero_division=0)
     recall = recall_score(test_labels, all_preds, zero_division=0)
     f1 = f1_score(test_labels, all_preds, zero_division=0)
-    try:
-        roc_auc = roc_auc_score(test_labels, all_probs) if len(np.unique(test_labels)) > 1 else 0.0
-    except ValueError:
-        roc_auc = 0.0
-
-    print(f"\nTGAT TEST SET EVALUATION")
+    roc_auc = roc_auc_score(test_labels, all_probs) if len(np.unique(test_labels)) > 1 else 0.0
+    
+    print(f"\n{'='*60}")
+    print(f"TGAT TEST SET EVALUATION RESULTS")
+    print(f"{'='*60}")
     print(f"Accuracy:  {acc:.4f}")
     print(f"Precision: {precision:.4f}")
     print(f"Recall:    {recall:.4f}")
     print(f"F1-Score:  {f1:.4f}")
-    print(f"ROC-AUC:   {roc_auc:.4f}\n")
-
+    print(f"ROC-AUC:   {roc_auc:.4f}")
+    print(f"{'='*60}")
+    
     return {
         'accuracy': acc,
         'precision': precision,
@@ -224,244 +388,73 @@ def evaluate_tgat(classifier: TGATFraudClassifier, tgat_model: TGATModel, time_e
     }
 
 
-# -------------------------
-# Training
-# -------------------------
-def train_tgat_fraud(events: List[Tuple[int, int, float, Optional[torch.Tensor]]],
-                     labels: np.ndarray,
-                     node_timestamp: dict,
-                     num_nodes: int,
-                     train_mask: np.ndarray,
-                     val_mask: np.ndarray,
-                     epochs: int = 30,
-                     batch_size: int = 256,
-                     lr: float = 1e-3,
-                     node_feat_dim: int = 64,
-                     time_dim: int = 16,
-                     embed_dim: int = 64,
-                     k: int = 10,
-                     L: int = 2):
-    # Node features
-    node_features = nn.Embedding(num_nodes, node_feat_dim).to(device)
-    nn.init.xavier_uniform_(node_features.weight)
-
-    # TGAT modules
-    time_encoder = TimeEncoder(time_dim=time_dim).to(device)
-    tgat_model = TGATModel(node_feat_dim=node_feat_dim, time_enc_dim=time_dim, embed_dim=embed_dim,
-                           n_layers=2, n_heads=2, dropout=0.1).to(device)
-
-    # classifier contains TGAT as submodule
-    classifier = TGATFraudClassifier(tgat_model, embed_dim=embed_dim).to(device)
-
-    # NeighborFinder
-    neigh_finder = NeighborFinder(num_nodes=num_nodes, max_neighbors=2000)
-    neigh_finder.num_nodes = num_nodes
-
-    # Prepopulate neighborfinder by streaming events
-    print("Processing temporal events to populate temporal adjacency (NeighborFinder)...")
-    for i, (src, dst, ts, ef) in enumerate(events):
-        if i % 10000 == 0:
-            print(f"  Processed {i:,}/{len(events):,} events")
-        neigh_finder.insert_edge(src, dst, ts, ef)
-    print("NeighborFinder populated.")
-
-    # Optimizer: classifier.parameters() already includes tgat_model
-    params = list(classifier.parameters()) + list(node_features.parameters()) + list(time_encoder.parameters())
-    optimizer = torch.optim.Adam(params, lr=lr, weight_decay=1e-5)
-    criterion = nn.CrossEntropyLoss()
-
-    train_nodes = np.where(train_mask)[0].tolist()
-    val_nodes = np.where(val_mask)[0].tolist()
-
-    best_val_acc = 0.0
-    best_state = None
-    start_time = time.time()
-
-    print("Starting supervised training...")
-    for epoch in range(1, epochs + 1):
-        classifier.train(); tgat_model.train(); time_encoder.train()
-        random.shuffle(train_nodes)
-        epoch_loss = 0.0
-        steps = 0
-
-        for i in range(0, len(train_nodes), batch_size):
-            batch_nodes = train_nodes[i:i + batch_size]
-            batch_labels = torch.tensor([labels[n] for n in batch_nodes], dtype=torch.long, device=device)
-
-            batch_times = [node_timestamp[n] for n in batch_nodes]
-            subgraphs = neigh_finder.get_recursive_subgraph(batch_nodes, batch_times, L, k)
-
-            tgt_feats, neigh_feats, neigh_time_enc, key_padding_mask, _ = build_batch_sequences_from_subgraphs(
-                subgraphs, node_features.weight.cpu(), time_encoder, max_neighbors_per_hop=k, L=L
-            )
-
-            # fix zero-neighbor batches
-            neigh_feats, neigh_time_enc, key_padding_mask = ensure_nonzero_neighbors(
-                neigh_feats, neigh_time_enc, key_padding_mask, node_features, time_encoder
-            )
-
-            tgt_feats = tgt_feats.to(device)
-            neigh_feats = neigh_feats.to(device)
-            neigh_time_enc = neigh_time_enc.to(device)
-            key_padding_mask = key_padding_mask.to(device)
-
-            # Compute embedding and classify
-            z = tgat_model(tgt_feats, neigh_feats, neigh_time_enc, key_padding_mask)  # (B, embed_dim)
-
-            optimizer.zero_grad()
-            logits = classifier(z)
-            loss = criterion(logits, batch_labels)
-
-            if torch.isnan(loss):
-                print(f"Warning: NaN loss at epoch {epoch}, batch starting {i}. Skipping batch.")
-                continue
-
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(params, max_norm=1.0)
-            optimizer.step()
-
-            epoch_loss += loss.item()
-            steps += 1
-
-        avg_loss = epoch_loss / max(1, steps)
-        print(f"Epoch {epoch}/{epochs} | Avg Loss: {avg_loss:.4f}")
-
-        # Validation
-        classifier.eval(); tgat_model.eval(); time_encoder.eval()
-        val_preds = []; val_probs = []
-        for i in range(0, len(val_nodes), batch_size):
-            batch_nodes = val_nodes[i:i + batch_size]
-            batch_times = [node_timestamp[n] for n in batch_nodes]
-            subgraphs = neigh_finder.get_recursive_subgraph(batch_nodes, batch_times, L, k)
-
-            tgt_feats, neigh_feats, neigh_time_enc, key_padding_mask, _ = build_batch_sequences_from_subgraphs(
-                subgraphs, node_features.weight.cpu(), time_encoder, max_neighbors_per_hop=k, L=L
-            )
-
-            # fix zero-neighbor batches in validation
-            neigh_feats, neigh_time_enc, key_padding_mask = ensure_nonzero_neighbors(
-                neigh_feats, neigh_time_enc, key_padding_mask, node_features, time_encoder
-            )
-
-            tgt_feats = tgt_feats.to(device)
-            neigh_feats = neigh_feats.to(device)
-            neigh_time_enc = neigh_time_enc.to(device)
-            key_padding_mask = key_padding_mask.to(device)
-
-            with torch.no_grad():
-                z = tgat_model(tgt_feats, neigh_feats, neigh_time_enc, key_padding_mask)
-                logits = classifier(z)
-                probs = F.softmax(logits, dim=1)
-                preds = logits.argmax(dim=1).cpu().numpy()
-                probs_fraud = probs[:, 1].cpu().numpy()
-            val_preds.extend(preds.tolist()); val_probs.extend(probs_fraud.tolist())
-
-        val_labels_list = [labels[n] for n in val_nodes]
-        val_pred_labels = val_preds
-        val_acc = accuracy_score(val_labels_list, val_pred_labels)
-        val_prec = precision_score(val_labels_list, val_pred_labels, zero_division=0)
-        val_rec = recall_score(val_labels_list, val_pred_labels, zero_division=0)
-        val_f1 = f1_score(val_labels_list, val_pred_labels, zero_division=0)
-        try:
-            val_auc = roc_auc_score(val_labels_list, val_probs) if len(np.unique(val_labels_list)) > 1 else 0.0
-        except ValueError:
-            val_auc = 0.0
-
-        print(f"  Val - Acc: {val_acc:.4f} | Prec: {val_prec:.4f} | Rec: {val_rec:.4f} | F1: {val_f1:.4f} | AUC: {val_auc:.4f}")
-
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            best_state = {
-                'tgat_model': tgat_model.state_dict(),
-                'classifier': classifier.state_dict(),
-                'node_features': node_features.state_dict(),
-                'time_encoder': time_encoder.state_dict()
-            }
-            print("  ✓ New best validation accuracy. Saving checkpoint in memory.")
-
-    total_time = time.time() - start_time
-    print(f"\nTraining finished in {total_time:.2f}s. Best val acc: {best_val_acc:.4f}")
-
-    # Restore best
-    if best_state is not None:
-        tgat_model.load_state_dict(best_state['tgat_model'])
-        classifier.load_state_dict(best_state['classifier'])
-        node_features.load_state_dict(best_state['node_features'])
-        time_encoder.load_state_dict(best_state['time_encoder'])
-        print("Loaded best model from validation.")
-
-    os.makedirs('saved_models', exist_ok=True)
-    save_path = 'saved_models/tgat_fraud_best.pt'
-    torch.save({
-        'tgat_model_state': tgat_model.state_dict(),
-        'classifier_state': classifier.state_dict(),
-        'node_features_state': node_features.state_dict(),
-        'time_encoder_state': time_encoder.state_dict(),
-        'config': {
-            'num_nodes': num_nodes,
-            'node_feat_dim': node_feat_dim,
-            'time_dim': time_dim,
-            'embed_dim': embed_dim,
-            'k': k,
-            'L': L
-        }
-    }, save_path)
-    print(f"Saved TGAT model and artifacts to {save_path}")
-
-    return classifier, tgat_model, node_features, neigh_finder
-
-
-# -------------------------
-# Main
-# -------------------------
 if __name__ == "__main__":
-    random.seed(0); torch.manual_seed(0); np.random.seed(0)
-
-    csv_path = "data/IBM_dataset/ibm_balanced_10to1.csv"
-    events, labels, num_nodes, node_timestamp, df = load_ibm_temporal_data(csv_path)
-
-    # Splits
-    all_idx = np.arange(num_nodes)
-    train_idx, test_val_idx = train_test_split(all_idx, test_size=0.3, random_state=42, stratify=labels)
-    val_idx, test_idx = train_test_split(test_val_idx, test_size=0.5, random_state=42, stratify=labels[test_val_idx])
-
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # Load IBM balanced dataset
+    csv_path = "data/ibm/ibm_fraud_29k_nonfraud_60k.csv"
+    events, node_features, labels, num_nodes = load_ibm_temporal_data(csv_path)
+    
+    # Create train/val/test split (same as GNN: 70/15/15)
+    all_indices = np.arange(num_nodes)
+    train_idx, test_val_idx = train_test_split(
+        all_indices,
+        test_size=0.3,
+        random_state=42,
+        stratify=labels
+    )
+    val_idx, test_idx = train_test_split(
+        test_val_idx,
+        test_size=0.5,
+        random_state=42,
+        stratify=labels[test_val_idx]
+    )
+    
     train_mask = np.zeros(num_nodes, dtype=bool)
     val_mask = np.zeros(num_nodes, dtype=bool)
     test_mask = np.zeros(num_nodes, dtype=bool)
     train_mask[train_idx] = True
     val_mask[val_idx] = True
     test_mask[test_idx] = True
-
+    
     print(f"\nDataset split:")
     print(f"  Train: {train_mask.sum():,} nodes ({train_mask.sum()/num_nodes*100:.1f}%)")
     print(f"  Val:   {val_mask.sum():,} nodes ({val_mask.sum()/num_nodes*100:.1f}%)")
     print(f"  Test:  {test_mask.sum():,} nodes ({test_mask.sum()/num_nodes*100:.1f}%)")
-
+    
     print(f"\nFraud distribution:")
     print(f"  Train: {labels[train_mask].sum():,} fraud / {train_mask.sum():,} total ({labels[train_mask].mean()*100:.2f}%)")
     print(f"  Val:   {labels[val_mask].sum():,} fraud / {val_mask.sum():,} total ({labels[val_mask].mean()*100:.2f}%)")
     print(f"  Test:  {labels[test_mask].sum():,} fraud / {test_mask.sum():,} total ({labels[test_mask].mean()*100:.2f}%)")
-
-    classifier, tgat_model, node_features, neigh_finder = train_tgat_fraud(
-        events=events,
-        labels=labels,
-        node_timestamp=node_timestamp,
-        num_nodes=num_nodes,
-        train_mask=train_mask,
-        val_mask=val_mask,
-        epochs=5,
-        batch_size=256,
-        lr=1e-3,
-        node_feat_dim=64,
-        time_dim=16,
-        embed_dim=64,
-        k=10,
-        L=2
+    
+    # Initialize TGAT model
+    print("\nInitializing TGAT model...")
+    node_feat_dim = node_features.shape[1]  # 3 features
+    tgat = TGATModel(
+        node_feat_dim=node_feat_dim,
+        time_enc_dim=50,
+        embed_dim=100,
+        n_layers=2,
+        n_heads=2,
+        dropout=0.1
     )
-
-    results = evaluate_tgat(classifier, tgat_model, TimeEncoder(time_dim=16).to(device),
-                            node_features, neigh_finder, node_timestamp,
-                            labels=labels, test_mask=test_mask,
-                            batch_size=256, k=10, L=2)
-
-    print("TGAT training + evaluation finished.")
+    
+    # Build neighbor finder for initial structure
+    neigh_finder = NeighborFinder(num_nodes=num_nodes, max_neighbors=500)
+    for src, dst, ts, edge_feat in events:
+        neigh_finder.insert_edge(src, dst, ts, edge_feat)
+    
+    model = TGATFraudClassifier(tgat, embed_dim=100, node_feat_dim=node_feat_dim, device=device)
+    
+    # Train model
+    model = train_tgat_fraud(
+        model, events, node_features, labels, train_mask, val_mask,
+        epochs=5, batch_size=256, lr=0.001, device=device
+    )
+    
+    # Evaluate on test set
+    results = evaluate_tgat_fraud(model, node_features, neigh_finder, labels, 
+                                  test_mask, batch_size=256, device=device)
+    
+    print("\nTGAT training complete!")
+    print("Compare these results with GNN and TGN baselines.")

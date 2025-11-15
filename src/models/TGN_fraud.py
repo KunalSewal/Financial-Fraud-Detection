@@ -377,7 +377,7 @@ if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     # Load IBM balanced dataset
-    csv_path = "data/IBM_dataset/ibm_balanced_10to1.csv"
+    csv_path = "data/ibm/ibm_fraud_29k_nonfraud_60k.csv"
     events, labels, num_nodes = load_ibm_temporal_data(csv_path)
     
     # Create train/val/test split (same as GNN: 70/15/15)
