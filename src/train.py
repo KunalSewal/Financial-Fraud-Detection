@@ -15,7 +15,6 @@ import numpy as np
 
 from .evaluate import compute_metrics
 
-
 def train_epoch(
     model: nn.Module,
     data_dict: Dict,

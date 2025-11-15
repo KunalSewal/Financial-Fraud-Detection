@@ -1,524 +1,479 @@
 """
-Temporal Graph Network (TGN) Implementation.
+Temporal Graph Networks (TGN) - PyTorch implementation (TGN-attn variant)
+Implements:
+ - per-node memory (GRU updater)
+ - raw message store (Algorithm 1 behavior)
+ - temporal attention embedding (neighbors + time encoding)
+ - neighbor sampling (most recent k)
+ - train loop with negative sampling for link prediction
 
-Based on:
-Rossi et al., "Temporal Graph Networks for Deep Learning on Dynamic Graphs"
-ICML 2020 Workshop on Graph Representation Learning
+Assumptions:
+ - Input data: chronological list/array of events: (src, dst, timestamp, edge_feat_tensor)
+ - Nodes are indexed [0..num_nodes-1]
+ - Edge features optional; use zeros if not available
 
-This is a FULL implementation with:
-- Memory module (stores historical node states)
-- Time encoding (continuous-time Fourier features)
-- Message function (aggregates neighbor interactions)
-- Memory updater (GRU-based state evolution)
-- Graph attention (attentive aggregation)
+Author: ChatGPT (GPT-5 Thinking mini)
 """
+
+import math
+import random
+from collections import defaultdict, deque
+from typing import List, Tuple, Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Optional, Tuple
-import math
+from torch.utils.data import DataLoader, Dataset
 
+# --------------------------
+# Utilities / Data handling
+# --------------------------
+
+class TemporalEdgeDataset(Dataset):
+    """
+    Simple dataset wrapper. Expects `events` to be a list of tuples:
+    (src, dst, timestamp, edge_feat_tensor)
+    Events must be sorted by timestamp ascending.
+    """
+    def __init__(self, events: List[Tuple[int,int,float,Optional[torch.Tensor]]]):
+        self.events = events
+
+    def __len__(self):
+        return len(self.events)
+
+    def __getitem__(self, idx):
+        return self.events[idx]
+
+def collate_events(batch):
+    """
+    Collate a list of events into batched tensors.
+    batch: list of (src, dst, ts, edge_feat) ; edge_feat may be None
+    Returns: dict of tensors
+    """
+    srcs = torch.tensor([b[0] for b in batch], dtype=torch.long)
+    dsts = torch.tensor([b[1] for b in batch], dtype=torch.long)
+    ts   = torch.tensor([b[2] for b in batch], dtype=torch.float)
+    # edge features: assume tensors of same dim or None
+    if batch[0][3] is None:
+        edge_feats = None
+    else:
+        edge_feats = torch.stack([b[3] for b in batch], dim=0)  # (B, edge_dim)
+    return {'src': srcs, 'dst': dsts, 'ts': ts, 'edge_feats': edge_feats}
+
+# --------------------------
+# Core Model Components
+# --------------------------
 
 class TimeEncoder(nn.Module):
     """
-    Time encoding using Fourier features (Bochner's theorem).
-    
-    Encodes continuous timestamps into learnable periodic features.
+    Time encoding similar to Time2Vec / sinusoidal encodings used in TGAT/TGN.
+    Input: delta time scalar (batch,)
+    Output: (batch, time_dim)
     """
-    
     def __init__(self, time_dim: int):
-        """
-        Args:
-            time_dim: Dimension of time encoding output
-        """
         super().__init__()
         self.time_dim = time_dim
-        
-        # Learnable frequency and phase parameters
-        self.w = nn.Linear(1, time_dim)
-        self.b = nn.Linear(1, time_dim)
-        
-    def forward(self, timestamps: torch.Tensor) -> torch.Tensor:
-        """
-        Encode timestamps into periodic features.
-        
-        Args:
-            timestamps: [batch_size] or [batch_size, 1]
-            
-        Returns:
-            Time embeddings [batch_size, time_dim]
-        """
-        if timestamps.dim() == 1:
-            timestamps = timestamps.unsqueeze(-1)
-        
-        # Fourier time features: cos(w*t + b)
-        time_encoding = torch.cos(self.w(timestamps) + self.b(timestamps))
-        
-        return time_encoding
+        # Frequencies and bias parameters learnable
+        self.w = nn.Parameter(torch.randn(time_dim))
+        self.b = nn.Parameter(torch.randn(time_dim))
 
-
-class MemoryModule(nn.Module):
-    """
-    Memory module that stores the last state of each node.
-    
-    Updated after each interaction via GRU-based memory updater.
-    """
-    
-    def __init__(self, num_nodes: int, memory_dim: int):
-        """
-        Args:
-            num_nodes: Maximum number of nodes in graph
-            memory_dim: Dimension of memory vectors
-        """
-        super().__init__()
-        self.num_nodes = num_nodes
-        self.memory_dim = memory_dim
-        
-        # Initialize memory with zeros
-        self.register_buffer('memory', torch.zeros(num_nodes, memory_dim))
-        self.register_buffer('last_update', torch.zeros(num_nodes))
-        
-        # Memory is updated via GRU
-        self.memory_updater = nn.GRUCell(memory_dim, memory_dim)
-        
-    def get_memory(self, node_ids: torch.Tensor) -> torch.Tensor:
-        """
-        Retrieve memory for specific nodes.
-        
-        Args:
-            node_ids: [batch_size] node indices
-            
-        Returns:
-            Memory vectors [batch_size, memory_dim]
-        """
-        return self.memory[node_ids]
-    
-    def get_last_update(self, node_ids: torch.Tensor) -> torch.Tensor:
-        """
-        Get last update time for nodes.
-        
-        Args:
-            node_ids: [batch_size] node indices
-            
-        Returns:
-            Last update times [batch_size]
-        """
-        return self.last_update[node_ids]
-    
-    def update_memory(
-        self,
-        node_ids: torch.Tensor,
-        messages: torch.Tensor,
-        timestamps: torch.Tensor
-    ):
-        """
-        Update memory for specific nodes using GRU.
-        
-        Args:
-            node_ids: [batch_size] node indices
-            messages: [batch_size, memory_dim] aggregated messages
-            timestamps: [batch_size] current timestamps
-        """
-        # Get current memory
-        current_memory = self.memory[node_ids]
-        
-        # Update via GRU
-        updated_memory = self.memory_updater(messages, current_memory)
-        
-        # Write back to memory
-        self.memory[node_ids] = updated_memory
-        self.last_update[node_ids] = timestamps
-        
-    def reset_memory(self):
-        """Reset all memory to zeros."""
-        self.memory.zero_()
-        self.last_update.zero_()
-    
-    def detach_memory(self):
-        """Detach memory from computation graph (for backprop truncation)."""
-        self.memory = self.memory.detach()
-
+    def forward(self, dt: torch.Tensor):
+        # dt: (batch,) or (batch,1)
+        # Expand dt to (batch, time_dim) via outer product
+        dt = dt.unsqueeze(-1)  # (batch,1)
+        x = dt * self.w + self.b  # broadcast -> (batch, time_dim)
+        return torch.sin(x)  # (batch, time_dim)
 
 class MessageFunction(nn.Module):
     """
-    Message function that aggregates information from neighbors.
-    
-    For each edge (u, v) at time t, compute message based on:
-    - Source node features
-    - Destination node features
-    - Edge features
-    - Time encoding
-    - Node memories
+    Produces raw message vector for an event (src,dst).
+    Input: src_mem, dst_mem, edge_feat, delta_time_enc
+    Output: message vector
     """
-    
-    def __init__(
-        self,
-        node_dim: int,
-        memory_dim: int,
-        edge_dim: int,
-        time_dim: int,
-        message_dim: int
-    ):
-        """
-        Args:
-            node_dim: Node feature dimension
-            memory_dim: Memory dimension
-            edge_dim: Edge feature dimension
-            time_dim: Time encoding dimension
-            message_dim: Output message dimension
-        """
+    def __init__(self, mem_dim, edge_dim, time_dim, msg_dim):
         super().__init__()
-        
-        # Total input dimension
-        input_dim = 2 * (node_dim + memory_dim) + edge_dim + time_dim
-        
-        # Message MLP
-        self.message_mlp = nn.Sequential(
-            nn.Linear(input_dim, message_dim * 2),
+        input_dim = mem_dim * 2 + (edge_dim if edge_dim else 0) + time_dim
+        self.mlp = nn.Sequential(
+            nn.Linear(input_dim, msg_dim),
             nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(message_dim * 2, message_dim),
-            nn.ReLU()
+            nn.Linear(msg_dim, msg_dim)
         )
-        
-    def forward(
-        self,
-        src_features: torch.Tensor,
-        dst_features: torch.Tensor,
-        src_memory: torch.Tensor,
-        dst_memory: torch.Tensor,
-        edge_features: torch.Tensor,
-        time_encoding: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        Compute messages for edges.
-        
-        Args:
-            src_features: [num_edges, node_dim]
-            dst_features: [num_edges, node_dim]
-            src_memory: [num_edges, memory_dim]
-            dst_memory: [num_edges, memory_dim]
-            edge_features: [num_edges, edge_dim]
-            time_encoding: [num_edges, time_dim]
-            
-        Returns:
-            Messages [num_edges, message_dim]
-        """
-        # Concatenate all features
-        message_input = torch.cat([
-            src_features,
-            dst_features,
-            src_memory,
-            dst_memory,
-            edge_features,
-            time_encoding
-        ], dim=-1)
-        
-        # Pass through MLP
-        messages = self.message_mlp(message_input)
-        
-        return messages
 
+    def forward(self, s_src, s_dst, edge_feat, dt_enc):
+        parts = [s_src, s_dst]
+        if edge_feat is not None:
+            parts.append(edge_feat)
+        parts.append(dt_enc)
+        x = torch.cat(parts, dim=-1)
+        return self.mlp(x)
 
-class MessageAggregator(nn.Module):
+class MemoryModule(nn.Module):
     """
-    Aggregate messages for each node.
-    
-    Multiple messages can arrive at a node; we need to aggregate them.
-    Options: mean, max, attention-based
+    Memory storage and updater (GRUCell style).
+    memory: (num_nodes, mem_dim)
+    last_update_ts: vector of last timestamp per node
     """
-    
-    def __init__(self, message_dim: int, aggregation: str = 'mean'):
-        """
-        Args:
-            message_dim: Message dimension
-            aggregation: 'mean', 'max', or 'attention'
-        """
+    def __init__(self, num_nodes: int, mem_dim: int, msg_dim: int, device='cpu'):
         super().__init__()
-        self.aggregation = aggregation
-        
-        if aggregation == 'attention':
-            self.attention = nn.Linear(message_dim, 1)
-    
-    def forward(
-        self,
-        messages: torch.Tensor,
-        node_ids: torch.Tensor,
-        num_nodes: int
-    ) -> torch.Tensor:
-        """
-        Aggregate messages per node.
-        
-        Args:
-            messages: [num_messages, message_dim]
-            node_ids: [num_messages] destination node IDs
-            num_nodes: Total number of nodes
-            
-        Returns:
-            Aggregated messages [num_nodes, message_dim]
-        """
-        message_dim = messages.size(-1)
-        aggregated = torch.zeros(num_nodes, message_dim, device=messages.device)
-        
-        if self.aggregation == 'mean':
-            # Mean aggregation with scatter_add
-            aggregated.scatter_add_(0, node_ids.unsqueeze(-1).expand_as(messages), messages)
-            
-            # Count messages per node
-            counts = torch.zeros(num_nodes, device=messages.device)
-            counts.scatter_add_(0, node_ids, torch.ones_like(node_ids, dtype=torch.float))
-            counts = counts.clamp(min=1).unsqueeze(-1)
-            
-            aggregated = aggregated / counts
-            
-        elif self.aggregation == 'max':
-            # Max aggregation
-            aggregated, _ = scatter_max(messages, node_ids, dim=0, dim_size=num_nodes)
-            
-        elif self.aggregation == 'attention':
-            # Attention-based aggregation
-            attention_scores = self.attention(messages).squeeze(-1)
-            attention_weights = torch.zeros(num_nodes, device=messages.device)
-            attention_weights.scatter_add_(0, node_ids, attention_scores.exp())
-            attention_weights = attention_weights.clamp(min=1e-8)
-            
-            # Weighted messages
-            weighted_messages = messages * (attention_scores.exp() / attention_weights[node_ids]).unsqueeze(-1)
-            aggregated.scatter_add_(0, node_ids.unsqueeze(-1).expand_as(weighted_messages), weighted_messages)
-        
-        return aggregated
-
-
-class TGN(nn.Module):
-    """
-    Full Temporal Graph Network implementation.
-    
-    Components:
-    1. Memory module (stores node states)
-    2. Time encoder (encodes timestamps)
-    3. Message function (computes edge messages)
-    4. Message aggregator (aggregates to nodes)
-    5. Memory updater (GRU-based update)
-    6. Embedding layer (final node embeddings)
-    7. Classifier (fraud prediction)
-    """
-    
-    def __init__(
-        self,
-        num_nodes: int,
-        node_dim: int,
-        edge_dim: int = 4,
-        memory_dim: int = 128,
-        time_dim: int = 32,
-        message_dim: int = None,  # If None, defaults to memory_dim
-        embedding_dim: int = 128,
-        num_classes: int = 2,
-        aggregation: str = 'mean',
-        dropout: float = 0.1
-    ):
-        """
-        Initialize TGN model.
-        
-        Args:
-            num_nodes: Maximum number of nodes
-            node_dim: Node feature dimension
-            edge_dim: Edge feature dimension
-            memory_dim: Memory dimension
-            time_dim: Time encoding dimension
-            message_dim: Message dimension (must equal memory_dim for GRU)
-            embedding_dim: Final embedding dimension
-            num_classes: Number of output classes
-            aggregation: Message aggregation method
-            dropout: Dropout probability
-        """
-        super().__init__()
-        
         self.num_nodes = num_nodes
-        self.node_dim = node_dim
-        self.memory_dim = memory_dim
-        
-        # Message dim must equal memory dim for GRU
-        if message_dim is None:
-            message_dim = memory_dim
-        elif message_dim != memory_dim:
-            import warnings
-            warnings.warn(f"message_dim ({message_dim}) should equal memory_dim ({memory_dim}) for GRU. "
-                         f"Setting message_dim = memory_dim.")
-            message_dim = memory_dim
-        
-        # 1. Memory module
-        self.memory = MemoryModule(num_nodes, memory_dim)
-        
-        # 2. Time encoder
-        self.time_encoder = TimeEncoder(time_dim)
-        
-        # 3. Message function
-        self.message_fn = MessageFunction(
-            node_dim=node_dim,
-            memory_dim=memory_dim,
-            edge_dim=edge_dim,
-            time_dim=time_dim,
-            message_dim=message_dim
-        )
-        
-        # 4. Message aggregator
-        self.message_aggregator = MessageAggregator(message_dim, aggregation)
-        
-        # 5. Embedding layer (combines features and memory)
-        self.embedding_layer = nn.Sequential(
-            nn.Linear(node_dim + memory_dim, embedding_dim),
+        self.mem_dim = mem_dim
+        # memory stored as buffer tensor (not a parameter)
+        self.register_buffer('memory', torch.zeros(num_nodes, mem_dim, device=device))
+        self.register_buffer('last_update', torch.zeros(num_nodes, device=device))
+        self.updater = nn.GRUCell(msg_dim, mem_dim)
+
+    def get_memory(self, node_ids: torch.LongTensor):
+        return self.memory[node_ids]
+
+    def set_memory(self, node_ids: torch.LongTensor, new_mem: torch.Tensor):
+        self.memory[node_ids] = new_mem.detach()  # detach to avoid accidental graph through storage
+
+    def update_with_messages(self, node_ids: List[int], agg_messages: torch.Tensor, timestamps: torch.Tensor):
+        """
+        node_ids: list of node indices (length M)
+        agg_messages: (M, msg_dim)
+        timestamps: (M,) new timestamps for those nodes
+        """
+        if len(node_ids) == 0:
+            return
+        node_ids_t = torch.tensor(node_ids, dtype=torch.long, device=self.memory.device)
+        cur_mem = self.memory[node_ids_t]                  # (M, mem_dim)
+        new_mem = self.updater(agg_messages.to(cur_mem.dtype), cur_mem)
+        # write back (no grads propagate through memory stores in this simplified update)
+        self.memory[node_ids_t] = new_mem.detach()
+        self.last_update[node_ids_t] = timestamps.detach()
+
+class RawMessageStore:
+    """
+    Stores the last raw message per node (or aggregated messages).
+    For simplicity we store one message per node (the last). In the paper
+    they aggregate messages produced in the same batch before updating memory.
+    Here we mimic: raw_message[node] = last message (tensor) ; if none -> None
+    """
+    def __init__(self, num_nodes:int, msg_dim:int, device='cpu'):
+        self.num_nodes = num_nodes
+        self.msg_dim = msg_dim
+        self.device = device
+        # Use a dict mapping node -> tensor message (to save memory for sparse)
+        self.store = dict()
+
+    def set_messages(self, node_ids: List[int], messages: torch.Tensor):
+        # messages: (M, msg_dim)
+        for i, nid in enumerate(node_ids):
+            self.store[int(nid)] = messages[i].detach().to(self.device)
+
+    def get_messages_for_nodes(self, node_ids: List[int]) -> Tuple[List[int], Optional[torch.Tensor]]:
+        """
+        Return filtered node_ids that have stored messages and a tensor (K, msg_dim)
+        """
+        found = []
+        msgs = []
+        for nid in node_ids:
+            if int(nid) in self.store:
+                found.append(int(nid))
+                msgs.append(self.store[int(nid)])
+        if not found:
+            return [], None
+        return found, torch.stack(msgs, dim=0).to(self.device)
+
+    def clear_nodes(self, node_ids: List[int]):
+        for nid in node_ids:
+            self.store.pop(int(nid), None)
+
+# --------------------------
+# Neighbor finder (most recent)
+# --------------------------
+class NeighborFinder:
+    """
+    Maintains adjacency lists with timestamps and edge features.
+    For each node we keep a deque of (neighbor_id, ts, edge_feat_tensor) sorted by time (most recent at right).
+    """
+    def __init__(self, num_nodes:int, max_neighbors:int=100):
+        self.num_nodes = num_nodes
+        self.max_neighbors = max_neighbors
+        self.adj = [deque() for _ in range(num_nodes)]  # list of deques
+
+    def insert_edge(self, src:int, dst:int, ts: float, edge_feat: Optional[torch.Tensor]):
+        # insert both directions (for undirected)
+        self._insert_one(src, dst, ts, edge_feat)
+        self._insert_one(dst, src, ts, edge_feat)
+
+    def _insert_one(self, node:int, nbr:int, ts: float, edge_feat: Optional[torch.Tensor]):
+        dq = self.adj[node]
+        dq.append((nbr, ts, edge_feat))
+        # keep deque length bounded
+        if len(dq) > self.max_neighbors:
+            dq.popleft()
+
+    def get_most_recent_neighbors(self, node_ids: List[int], k:int):
+        """
+        For each node in node_ids, return up to k most recent neighbors as lists.
+        Output shapes:
+          neigh_ids: list of lists of length k (padded with -1)
+          neigh_timestamps: list of lists of length k (padded with 0)
+          neigh_edge_feats: list of lists of tensors or None
+        """
+        neigh_ids = []
+        neigh_ts = []
+        neigh_edge_feats = []
+        for nid in node_ids:
+            dq = self.adj[nid]
+            # take from right (most recent)
+            recent = list(dq)[-k:] if len(dq) > 0 else []
+            # pad to k with (-1,0,None)
+            pad = k - len(recent)
+            recent_padded = [(-1, 0.0, None)] * pad + recent  # oldest-first so final order oldest->newest
+            ids = [x[0] for x in recent_padded]
+            ts  = [x[1] for x in recent_padded]
+            efs = [x[2] for x in recent_padded]
+            neigh_ids.append(ids)
+            neigh_ts.append(ts)
+            neigh_edge_feats.append(efs)
+        return neigh_ids, neigh_ts, neigh_edge_feats
+
+# --------------------------
+# Temporal Attention Embedder (TGN-attn)
+# --------------------------
+class TemporalAttentionEmbedding(nn.Module):
+    """
+    For each target node, attend over its k most recent neighbors. Query is target node memory.
+    Keys/Values are neighbor memories + time encoding + edge features.
+    We implement a multi-head attention per node: sequence length = k.
+    """
+    def __init__(self, mem_dim:int, edge_dim:int, time_dim:int, out_dim:int, num_heads:int=2):
+        super().__init__()
+        self.mem_dim = mem_dim
+        self.edge_dim = edge_dim if edge_dim else 0
+        self.time_dim = time_dim
+        self.input_dim = mem_dim + self.edge_dim + time_dim
+        self.num_heads = num_heads
+        self.out_dim = out_dim
+        # a small linear to project neighbor (mem + edge + time) into key/value space
+        self.key_lin = nn.Linear(self.input_dim, out_dim)
+        self.value_lin = nn.Linear(self.input_dim, out_dim)
+        # project query (node_mem) into same dim
+        self.query_lin = nn.Linear(mem_dim, out_dim)
+        self.attention = nn.MultiheadAttention(embed_dim=out_dim, num_heads=num_heads, batch_first=True)
+        # final combiner
+        self.combine = nn.Linear(mem_dim + out_dim, out_dim)
+
+    def forward(self, node_mems: torch.Tensor, neigh_mems: torch.Tensor,
+                neigh_edge_feats: Optional[torch.Tensor], neigh_dt_enc: torch.Tensor):
+        """
+        node_mems: (B, mem_dim)
+        neigh_mems: (B, k, mem_dim)
+        neigh_edge_feats: (B, k, edge_dim) or None
+        neigh_dt_enc: (B, k, time_dim)
+        Returns: z (B, out_dim)
+        """
+        B, k, _ = neigh_dt_enc.shape
+        # build neighbor input
+        if self.edge_dim > 0 and neigh_edge_feats is not None:
+            neigh_input = torch.cat([neigh_mems, neigh_edge_feats, neigh_dt_enc], dim=-1)  # (B,k,input_dim)
+        else:
+            neigh_input = torch.cat([neigh_mems, neigh_dt_enc], dim=-1)
+        keys = self.key_lin(neigh_input)    # (B,k,out_dim)
+        vals = self.value_lin(neigh_input)  # (B,k,out_dim)
+        queries = self.query_lin(node_mems).unsqueeze(1)  # (B,1,out_dim)
+        # use nn.MultiheadAttention which expects (B, seq_len, embed)
+        attn_out, _ = self.attention(queries, keys, vals, need_weights=False)  # (B,1,out_dim)
+        attn_out = attn_out.squeeze(1)  # (B, out_dim)
+        z = F.relu(self.combine(torch.cat([node_mems, attn_out], dim=-1)))  # (B, out_dim)
+        return z
+
+# --------------------------
+# Decoder for link prediction
+# --------------------------
+class LinkPredictor(nn.Module):
+    """
+    Simple MLP scoring function on concatenated embeddings.
+    """
+    def __init__(self, in_dim:int, hidden:int=128):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, hidden),
             nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(embedding_dim, embedding_dim),
-            nn.ReLU()
+            nn.Linear(hidden, 1)
         )
-        
-        # 6. Classifier
-        self.classifier = nn.Sequential(
-            nn.Linear(embedding_dim, embedding_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(embedding_dim // 2, num_classes)
-        )
-        
-    def compute_messages(
-        self,
-        edge_index: torch.Tensor,
-        node_features: torch.Tensor,
-        edge_features: torch.Tensor,
-        edge_times: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+
+    def forward(self, z_src, z_dst):
+        x = torch.cat([z_src, z_dst], dim=-1)
+        return torch.sigmoid(self.net(x)).squeeze(-1)  # (B,)
+
+# --------------------------
+# Full TGN Model (orchestrates modules)
+# --------------------------
+class TGNModel(nn.Module):
+    def __init__(self, num_nodes:int, mem_dim:int=172, msg_dim:int=100,
+                 edge_dim:int=0, time_dim:int=100, embed_dim:int=100, k: int = 10,
+                 device='cpu'):
+        super().__init__()
+        self.device = device
+        self.num_nodes = num_nodes
+        self.mem_dim = mem_dim
+        self.msg_dim = msg_dim
+        self.edge_dim = edge_dim
+        self.time_dim = time_dim
+        self.embed_dim = embed_dim
+        self.k = k
+
+        # modules
+        self.time_encoder = TimeEncoder(time_dim).to(device)
+        self.msg_fn = MessageFunction(mem_dim, edge_dim, time_dim, msg_dim).to(device)
+        self.memory = MemoryModule(num_nodes, mem_dim, msg_dim, device=device).to(device)
+        self.raw_store = RawMessageStore(num_nodes, msg_dim, device=device)
+        self.neigh_finder = NeighborFinder(num_nodes, max_neighbors=500)  # store a lot
+        self.embedder = TemporalAttentionEmbedding(mem_dim, edge_dim, time_dim, embed_dim).to(device)
+        self.predictor = LinkPredictor(in_dim=embed_dim*2).to(device)
+
+    def compute_raw_messages(self, src_mems, dst_mems, edge_feats, dt_enc):
         """
-        Compute messages for all edges.
-        
-        Args:
-            edge_index: [2, num_edges] edge connectivity
-            node_features: [num_nodes, node_dim] node features
-            edge_features: [num_edges, edge_dim] edge features
-            edge_times: [num_edges] edge timestamps
-            
-        Returns:
-            (messages, destination_nodes)
+        Compute raw messages for both src and dst (directional or symmetric).
+        Returns raw_msg_src, raw_msg_dst both shape (B, msg_dim)
         """
-        src_nodes = edge_index[0]
-        dst_nodes = edge_index[1]
-        
-        # Get node features
-        src_features = node_features[src_nodes]
-        dst_features = node_features[dst_nodes]
-        
-        # Get node memories
-        src_memory = self.memory.get_memory(src_nodes)
-        dst_memory = self.memory.get_memory(dst_nodes)
-        
-        # Get last update times
-        src_last_update = self.memory.get_last_update(src_nodes)
-        dst_last_update = self.memory.get_last_update(dst_nodes)
-        
-        # Compute time deltas
-        src_time_delta = edge_times - src_last_update
-        dst_time_delta = edge_times - dst_last_update
-        
-        # Encode time (use average time delta)
-        time_delta = (src_time_delta + dst_time_delta) / 2
-        time_encoding = self.time_encoder(time_delta)
-        
-        # Compute messages
-        messages = self.message_fn(
-            src_features, dst_features,
-            src_memory, dst_memory,
-            edge_features,
-            time_encoding
-        )
-        
-        return messages, dst_nodes
-    
-    def update_memory_with_messages(
-        self,
-        node_ids: torch.Tensor,
-        messages: torch.Tensor,
-        timestamps: torch.Tensor
-    ):
+        # per paper raw message uses s_src, s_dst, edge, dt
+        raw = self.msg_fn(src_mems, dst_mems, edge_feats, dt_enc)  # (B, msg_dim)
+        # symmetric for both nodes (paper sometimes computes both directions - we reuse same)
+        return raw, raw
+
+    def get_node_embeddings(self, node_ids: List[int]):
         """
-        Update node memory with aggregated messages.
+        Helper to get embeddings z_i(t) for a set of nodes using current memory & neighbors.
+        Returns (B, embed_dim)
         """
-        # Aggregate messages per node
-        aggregated_messages = self.message_aggregator(
-            messages, node_ids, self.num_nodes
-        )
-        
-        # Get unique nodes that received messages
-        unique_nodes = torch.unique(node_ids)
-        
-        # Update memory for these nodes
-        self.memory.update_memory(
-            unique_nodes,
-            aggregated_messages[unique_nodes],
-            timestamps[0].expand(len(unique_nodes))  # Use first timestamp
-        )
-    
-    def forward(
-        self,
-        node_features: torch.Tensor,
-        edge_index: Optional[torch.Tensor] = None,
-        edge_features: Optional[torch.Tensor] = None,
-        edge_times: Optional[torch.Tensor] = None,
-        node_ids: Optional[torch.Tensor] = None
-    ) -> torch.Tensor:
-        """
-        Forward pass for node classification.
-        
-        Args:
-            node_features: [num_nodes, node_dim]
-            edge_index: [2, num_edges] (optional, for memory update)
-            edge_features: [num_edges, edge_dim] (optional)
-            edge_times: [num_edges] (optional)
-            node_ids: [batch_size] nodes to classify (if None, classify all)
-            
-        Returns:
-            Logits [num_nodes, num_classes] or [batch_size, num_classes]
-        """
-        num_nodes = node_features.size(0)
-        
-        # Update memory if edges provided
-        if edge_index is not None and edge_times is not None:
-            if edge_features is None:
-                edge_features = torch.ones(edge_index.size(1), 1, device=edge_index.device)
-            
-            # Compute and aggregate messages
-            messages, dst_nodes = self.compute_messages(
-                edge_index, node_features, edge_features, edge_times
-            )
-            
-            # Update memory
-            self.update_memory_with_messages(dst_nodes, messages, edge_times)
-        
-        # Get nodes to classify
-        if node_ids is None:
-            node_ids = torch.arange(num_nodes, device=node_features.device)
-        
-        # Get current memory
-        node_memory = self.memory.get_memory(node_ids)
-        
-        # Combine features and memory
-        node_embedding = torch.cat([
-            node_features[node_ids],
-            node_memory
-        ], dim=-1)
-        
-        # Embed
-        embeddings = self.embedding_layer(node_embedding)
-        
-        # Classify
-        logits = self.classifier(embeddings)
-        
-        return logits
-    
-    def reset(self):
-        """Reset memory (e.g., between epochs)."""
-        self.memory.reset_memory()
-    
-    def detach_memory(self):
-        """Detach memory from computation graph."""
-        self.memory.detach_memory()
+        device = self.device
+        node_ids_t = torch.tensor(node_ids, dtype=torch.long, device=device)
+        node_mems = self.memory.get_memory(node_ids_t)  # (B, mem_dim)
+        # fetch most recent neighbors
+        neigh_ids, neigh_ts, neigh_edge_feats = self.neigh_finder.get_most_recent_neighbors(node_ids, self.k)
+        # build neighbor mems tensor (B,k,mem_dim) and edge_feat tensor (B,k,edge_dim) and dt enc (B,k,time_dim)
+        B = len(node_ids)
+        k = self.k
+        neigh_mems = torch.zeros(B, k, self.mem_dim, device=device)
+        neigh_edge_t = None if self.edge_dim == 0 else torch.zeros(B, k, self.edge_dim, device=device)
+        neigh_dt_enc = torch.zeros(B, k, self.time_dim, device=device)
+        for i in range(B):
+            for j in range(k):
+                nid = neigh_ids[i][j]
+                if nid == -1:
+                    # leave zeros (padding)
+                    continue
+                neigh_mems[i,j] = self.memory.get_memory(torch.tensor(nid, device=device))
+                if self.edge_dim > 0 and neigh_edge_feats[i][j] is not None:
+                    neigh_edge_t[i,j] = neigh_edge_feats[i][j].to(device)
+                dt = torch.tensor(self.memory.last_update[nid].item(), device=device)
+                # compute delta time between target node last update and neighbor timestamp:
+                # We'll use neighbor timestamp stored in neigh_ts
+                neigh_dt_enc[i,j] = self.time_encoder(torch.tensor(neigh_ts[i][j], device=device).unsqueeze(0))
+        # compute embeddings with attention
+        z = self.embedder(node_mems, neigh_mems, neigh_edge_t, neigh_dt_enc)  # (B, embed_dim)
+        return z
+
+# --------------------------
+# Training Loop (Algorithm 1 style)
+# --------------------------
+def train_tgn(model: TGNModel, events: List[Tuple[int,int,float,Optional[torch.Tensor]]],
+              num_epochs:int=1, batch_size:int=200, lr:float=1e-3, neg_ratio:int=1, device='cpu'):
+    """
+    events: chronological list of (src,dst,ts,edge_feat)
+    """
+    model.to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    dataset = TemporalEdgeDataset(events)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_events)
+
+    for epoch in range(num_epochs):
+        print(f"Epoch {epoch+1}/{num_epochs}")
+        for batch_idx, batch in enumerate(loader):
+            src = batch['src'].to(device)
+            dst = batch['dst'].to(device)
+            ts  = batch['ts'].to(device)
+            edge_feats = batch['edge_feats'].to(device) if batch['edge_feats'] is not None else None
+            B = src.size(0)
+
+            # Step A: BEFORE predicting for this batch, update memory using previously stored raw messages
+            # Gather nodes involved in this batch
+            nodes_in_batch = set(src.tolist() + dst.tolist())
+            # Check raw store for messages for these nodes
+            node_list = list(nodes_in_batch)
+            found_nodes, found_msgs = model.raw_store.get_messages_for_nodes(node_list)
+            if found_nodes and found_msgs is not None:
+                # Update memory for those nodes using the stored messages
+                # For timestamp we use model.memory.last_update (we don't have a new ts for those old stored messages)
+                # But per Algorithm 1: aggregate messages and update memory with their associated timestamps
+                timestamps = torch.tensor([model.memory.last_update[n] for n in found_nodes], device=device)
+                model.memory.update_with_messages(found_nodes, found_msgs.to(device), timestamps)
+
+                # After using them, clear from raw store
+                model.raw_store.clear_nodes(found_nodes)
+
+            # Step B: compute embeddings for src and dst using current memory (which just got updated)
+            src_list = src.tolist()
+            dst_list = dst.tolist()
+            # embeddings
+            z_src = model.get_node_embeddings(src_list)   # (B, embed_dim)
+            z_dst = model.get_node_embeddings(dst_list)   # (B, embed_dim)
+
+            # Step C: scoring positive pairs
+            pos_scores = model.predictor(z_src, z_dst)  # (B,)
+
+            # Step D: negative sampling (for each src sample a random negative dst)
+            neg_dst_ids = torch.randint(0, model.num_nodes, (B * neg_ratio,), device=device)
+            # get embeddings for neg dst (repeat src embeddings accordingly if neg_ratio>1)
+            z_neg_dst = model.get_node_embeddings(neg_dst_ids.tolist())  # (B*neg_ratio, embed_dim)
+            # expand z_src to match neg samples
+            z_src_rep = z_src.repeat_interleave(neg_ratio, dim=0)  # (B*neg_ratio, embed_dim)
+            neg_scores = model.predictor(z_src_rep, z_neg_dst)  # (B*neg_ratio,)
+
+            # Loss: binary cross entropy; pos labeled 1, neg labeled 0
+            pos_loss = F.binary_cross_entropy(pos_scores, torch.ones_like(pos_scores))
+            neg_loss = F.binary_cross_entropy(neg_scores, torch.zeros_like(neg_scores))
+            loss = pos_loss + neg_loss
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            # Step E: compute raw messages for current batch (use memory before writing new memory)
+            # Need dt encoding: delta between event ts and last_update per node
+            last_src_times = torch.tensor([model.memory.last_update[n] for n in src.tolist()], device=device)
+            dt_src = ts - last_src_times
+            dt_src_enc = model.time_encoder(dt_src)
+
+            last_dst_times = torch.tensor([model.memory.last_update[n] for n in dst.tolist()], device=device)
+            dt_dst = ts - last_dst_times
+            dt_dst_enc = model.time_encoder(dt_dst)
+
+            # current memory for nodes (we used memory above; get again)
+            cur_src_mem = model.memory.get_memory(src)
+            cur_dst_mem = model.memory.get_memory(dst)
+            raw_src_msgs, raw_dst_msgs = model.compute_raw_messages(cur_src_mem, cur_dst_mem,
+                                                                    edge_feats, dt_src_enc)
+            # Store raw messages for future batches (for both src & dst)
+            # We'll store one message per node (latest). If multiple events for same node in batch,
+            # we aggregate by taking the latest (here the batch is chronological so last wins).
+            # Build mapping node->message for all nodes in the batch:
+            per_node_msgs = defaultdict(list)
+            for i in range(B):
+                per_node_msgs[int(src[i].item())].append(raw_src_msgs[i].detach().cpu())  # store on cpu to save GPU memory
+                per_node_msgs[int(dst[i].item())].append(raw_dst_msgs[i].detach().cpu())
+            # For each node take mean of messages in this batch (aggregation)
+            node_ids_to_store = []
+            node_msgs_to_store = []
+            for nid, msgs in per_node_msgs.items():
+                agg = torch.stack(msgs, dim=0).mean(dim=0).to(device)
+                node_ids_to_store.append(nid)
+                node_msgs_to_store.append(agg)
+            if node_ids_to_store:
+                model.raw_store.set_messages(node_ids_to_store, torch.stack(node_msgs_to_store, dim=0).to(device))
+
+            # Finally: update neighbor lists with edges from this batch (so future embeddings see them)
+            for i in range(B):
+                s = int(src[i].item()); d = int(dst[i].item()); t = float(ts[i].item())
+                ef = edge_feats[i] if edge_feats is not None else None
+                model.neigh_finder.insert_edge(s, d, t, ef)
+
+            if batch_idx % 10 == 0:
+                print(f"Epoch {epoch+1} Batch {batch_idx} Loss {loss.item():.4f}")
+
+    print("Training complete.")

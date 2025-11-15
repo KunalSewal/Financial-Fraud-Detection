@@ -214,7 +214,7 @@ def compare_models():
     print("4. Training HMSTA (Novel Hybrid Architecture)")
     print("=" * 80)
     
-    print("\n🏗️  Creating HMSTA model...")
+    print("\n Creating HMSTA model...")
     hmsta = create_hmsta_model(
         dataset_name='ethereum',
         node_features=data.num_node_features,
