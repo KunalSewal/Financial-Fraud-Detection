@@ -26,7 +26,7 @@ ipywidgets>=8.0.0
 tqdm>=4.65.0
 pyyaml>=6.0
 python-dotenv>=1.0.0
-
+torch-geometric
 # Optional
 h5py>=3.8.0
 kaggle>=1.5.16

@@ -141,8 +141,8 @@ def load_ibm_temporal_data(csv_path: str):
 
 
 def train_tgn_fraud(model: TGNFraudClassifier, events: List[Tuple], labels: np.ndarray,
-                    train_mask: np.ndarray, val_mask: np.ndarray,
-                    epochs: int = 5, batch_size: int = 256, lr: float = 0.001, device='cpu'):
+    train_mask: np.ndarray, val_mask: np.ndarray,
+    epochs: int = 50, batch_size: int = 262144, lr: float = 0.001, device='cpu'):
     """
     Train TGN model for fraud classification.
     """
@@ -189,11 +189,11 @@ def train_tgn_fraud(model: TGNFraudClassifier, events: List[Tuple], labels: np.n
                 edge_feat_t = None
             
             raw_msg, _ = model.tgn.compute_raw_messages(src_mem, dst_mem, edge_feat_t, dt_enc)
-            
+
             # Update memory immediately (simplified compared to full TGN batching)
             model.tgn.memory.update_with_messages([src, dst], 
-                                                  torch.cat([raw_msg, raw_msg]), 
-                                                  torch.tensor([ts, ts], device=device))
+                                                torch.cat([raw_msg, raw_msg]), 
+                                                torch.tensor([ts, ts], device=device))
     
     print("Temporal event processing complete. Starting supervised training...\n")
     
@@ -231,9 +231,8 @@ def train_tgn_fraud(model: TGNFraudClassifier, events: List[Tuple], labels: np.n
             epoch_loss += loss.item()
             num_batches += 1
             
-            # Progress update every 100 batches
-            if num_batches % 100 == 0:
-                print(f"  Epoch {epoch+1}/{epochs} | Batch {num_batches}/{len(train_nodes)//batch_size} | Loss: {loss.item():.4f}")
+            # Progress update every batch
+            print(f"  Epoch {epoch+1}/{epochs} | Batch {num_batches}/{len(train_nodes)//batch_size} | Loss: {loss.item():.4f}")
         
         avg_loss = epoch_loss / num_batches if num_batches > 0 else 0
         
@@ -430,11 +429,11 @@ if __name__ == "__main__":
     # Train model
     model = train_tgn_fraud(
         model, events, labels, train_mask, val_mask,
-        epochs=5, batch_size=256, lr=0.001, device=device
+        epochs=10, batch_size=4096, lr=0.001, device=device
     )
     
     # Evaluate on test set
-    results = evaluate_tgn_fraud(model, labels, test_mask, batch_size=256, device=device)
+    results = evaluate_tgn_fraud(model, labels, test_mask, batch_size=4096, device=device)
     
     print("\nTGN training complete!")
     print("Compare these results with the basic GNN baseline.")

@@ -267,7 +267,7 @@ def train_tgat_fraud(model: TGATFraudClassifier, events: List[Tuple], node_featu
             num_batches += 1
             
             # Progress update every 100 batches
-            if num_batches % 100 == 0:
+            if num_batches % 1 == 0:
                 print(f"  Epoch {epoch+1}/{epochs} | Batch {num_batches}/{len(train_nodes)//batch_size} | Loss: {loss.item():.4f}")
         
         avg_loss = epoch_loss / num_batches if num_batches > 0 else 0
@@ -328,7 +328,24 @@ def train_tgat_fraud(model: TGATFraudClassifier, events: List[Tuple], node_featu
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
         print("Loaded best model from validation")
-    
+
+    # Save model to disk (like TGN_fraud.py)
+    import os
+    os.makedirs('saved_models', exist_ok=True)
+    model_path = 'saved_models/tgat_fraud_best.pt'
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'tgat_config': {
+            'embed_dim': getattr(model.tgat, 'embed_dim', None),
+            'time_dim': getattr(model.tgat, 'time_dim', None),
+            'n_layers': getattr(model.tgat, 'n_layers', None),
+            'n_heads': getattr(model.tgat, 'n_heads', None),
+            'dropout': getattr(model.tgat, 'dropout', None),
+            'node_feat_dim': getattr(model.tgat, 'node_feat_dim', None)
+        }
+    }, model_path)
+    print(f"Model saved to {model_path}")
+
     return model
 
 
@@ -449,12 +466,12 @@ if __name__ == "__main__":
     # Train model
     model = train_tgat_fraud(
         model, events, node_features, labels, train_mask, val_mask,
-        epochs=5, batch_size=256, lr=0.001, device=device
+        epochs=15, batch_size=786432, lr=0.001, device=device
     )
     
     # Evaluate on test set
     results = evaluate_tgat_fraud(model, node_features, neigh_finder, labels, 
-                                  test_mask, batch_size=256, device=device)
+                                  test_mask, batch_size=786432, device=device)
     
     print("\nTGAT training complete!")
     print("Compare these results with GNN and TGN baselines.")
