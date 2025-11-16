@@ -26,33 +26,38 @@ export default function MetricsGrid() {
     return new Intl.NumberFormat('en-US').format(num);
   };
 
+  // Calculate fraud rate for display
+  const fraudRate = metricsData 
+    ? (metricsData.fraud_detected / metricsData.total_transactions) * 100
+    : 0;
+
   const metrics: Metric[] = metricsData
     ? [
         {
           title: 'Total Transactions',
           value: formatNumber(metricsData.total_transactions),
-          change: Math.random() * 10 - 5, // Random change for animation
+          change: 0, // No historical data to compare
           icon: Activity,
           color: 'blue',
         },
         {
           title: 'Fraud Detected',
           value: formatNumber(metricsData.fraud_detected),
-          change: Math.random() * 10 - 5,
+          change: 0, // Remove misleading fraud rate display
           icon: AlertTriangle,
           color: 'red',
         },
         {
           title: 'Model Accuracy',
           value: `${metricsData.model_accuracy.toFixed(1)}%`,
-          change: Math.random() * 2,
+          change: 0, // Remove fake baseline comparison
           icon: TrendingUp,
           color: 'green',
         },
         {
           title: 'Active Users',
           value: formatNumber(metricsData.active_users),
-          change: Math.random() * 10 - 5,
+          change: 0, // No historical data
           icon: Activity,
           color: 'purple',
         },
@@ -139,23 +144,26 @@ export default function MetricsGrid() {
                   <Icon className={`w-6 h-6 text-${metric.color}-500`} />
                 </div>
 
-                <motion.div
-                  animate={{ rotate: isPositive ? 0 : 180 }}
-                  className={`flex items-center gap-1 px-2 py-1 rounded-full ${
-                    isPositive
-                      ? 'bg-green-500/10 text-green-500'
-                      : 'bg-red-500/10 text-red-500'
-                  }`}
-                >
-                  {isPositive ? (
-                    <TrendingUp className="w-4 h-4" />
-                  ) : (
-                    <TrendingDown className="w-4 h-4" />
-                  )}
-                  <span className="text-xs font-semibold">
-                    {Math.abs(metric.change).toFixed(1)}%
-                  </span>
-                </motion.div>
+                {/* Only show change indicator if there's actual change */}
+                {metric.change !== 0 && (
+                  <motion.div
+                    animate={{ rotate: isPositive ? 0 : 180 }}
+                    className={`flex items-center gap-1 px-2 py-1 rounded-full ${
+                      isPositive
+                        ? 'bg-green-500/10 text-green-500'
+                        : 'bg-red-500/10 text-red-500'
+                    }`}
+                  >
+                    {isPositive ? (
+                      <TrendingUp className="w-4 h-4" />
+                    ) : (
+                      <TrendingDown className="w-4 h-4" />
+                    )}
+                    <span className="text-xs font-semibold">
+                      {Math.abs(metric.change).toFixed(1)}%
+                    </span>
+                  </motion.div>
+                )}
               </div>
 
               <h3 className="text-sm text-muted-foreground mb-1">{metric.title}</h3>

@@ -39,15 +39,12 @@ pip_freeze.txt
 .ipynb_checkpoints
 *.ipynb_checkpoints/
 
-# Data files (large datasets)
-data/
-!data/Readme.md
-!data/*.py
-!data/preprocessing/
-!data/download_scripts/
-
-# Allow small example files if needed
-# !data/transaction_dataset.csv
+# Data files - Allow IBM dataset to be pushed (reduced size)
+# Large datasets excluded, but keeping IBM fraud dataset
+!data/
+!data/**
+data/dgraphfinv2_edge_timestamp.npy
+data/dgraphfinv2_node_timestamp.npy
 
 # Model checkpoints
 *.pt

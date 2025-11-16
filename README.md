@@ -8,187 +8,231 @@
 
 ## 📋 Project Overview
 
-This project explores the application of Temporal Graph Neural Networks (TGNNs) for detecting fraudulent transactions in financial networks. By modeling how transactions evolve over time, we aim to capture subtle fraud patterns that static methods may miss.
+This project implements and compares Temporal Graph Neural Networks (TGNNs) for detecting fraudulent transactions in financial networks. We've built a complete end-to-end system including model training, evaluation, and a production-ready real-time dashboard.
 
-### Key Objectives
-- Compare static GNN baselines vs temporal GNNs for fraud detection
-- Evaluate on multiple financial fraud benchmarks
-- Demonstrate scalability from small to large-scale datasets
+### Key Achievements
+- ✅ Implemented and trained 5 models: Baseline GNN, TGAT, TGN, and 2 ensemble methods
+- ✅ Achieved **74.78% AUC** with Weighted Ensemble (35% TGN + 65% TGAT)
+- ✅ Built full-stack fraud detection dashboard with Next.js + FastAPI
+- ✅ Real-time transaction monitoring and graph visualization
+- ✅ Comprehensive model analytics and performance comparison
 
 ## 🗂️ Repository Structure
 
 ```
 Financial-Fraud-Detection/
-├── README.md
-├── requirements.txt
-├── data/                      # Raw data, download scripts, preprocessing
-│   ├── transaction_dataset.csv
-│   ├── download_scripts/
-│   └── preprocessing/
-├── notebooks/                 # Jupyter notebooks for exploration/experiments
+├── README.md                  # Main project documentation
+├── requirements.txt           # Python dependencies
+├── api/                       # FastAPI backend
+│   ├── main.py               # API server with fraud detection endpoints
+│   └── requirements.txt      # API-specific dependencies
+├── dashboard/                 # Next.js frontend
+│   ├── app/                  # Next.js 13+ app directory
+│   │   ├── page.tsx         # Dashboard homepage
+│   │   ├── analytics/       # Model analytics page
+│   │   ├── graph/           # Network visualization
+│   │   ├── monitoring/      # Live transaction monitoring
+│   │   ├── experiments/     # Training history
+│   │   ├── alerts/          # Fraud alerts
+│   │   ├── security/        # System security status
+│   │   └── settings/        # Configuration
+│   ├── components/          # React components
+│   ├── lib/                 # API client and utilities
+│   ├── package.json
+│   └── tsconfig.json
+├── data/                      # Dataset and preprocessing
+│   ├── ibm/                  # IBM fraud detection dataset
+│   │   └── ibm_fraud_29k_nonfraud_60k.csv
+│   ├── preprocessing/        # Data processing scripts
+│   └── processed/            # Processed graph data
+├── src/                       # Core ML code
+│   ├── models/               # Model implementations
+│   │   ├── tgn.py           # Temporal Graph Network
+│   │   ├── tgat.py          # Temporal Graph Attention
+│   │   └── mptgnn.py        # Multi-path TGNN
+│   ├── data_utils.py        # Dataset utilities
+│   └── evaluate.py          # Evaluation metrics
+├── scripts/                   # Training and analysis scripts
+│   ├── train_tgn_fraud.py
+│   ├── train_tgat_fraud.py
+│   ├── compare_models.py
+│   └── README.md
+├── saved_models/              # Trained model checkpoints
+│   ├── tgn_fraud_best.pt
+│   └── tgat_fraud_best.pt
+├── checkpoints/               # Training checkpoints
+├── results/                   # Experimental results
+│   ├── Final_Results.md      # Summary of all model results
+│   └── figures/              # Plots and visualizations
+├── notebooks/                 # Jupyter notebooks
 │   ├── 01_data_exploration.ipynb
 │   ├── 02_baseline_models.ipynb
 │   └── 03_temporal_models.ipynb
-├── src/                       # Core code (data utils, models, training, evaluation)
-│   ├── __init__.py
-│   ├── data_utils.py
-│   ├── evaluate.py
-│   ├── models.py
-│   └── train.py
-├── scripts/                   # Standalone scripts for training, analysis, etc.
-│   ├── analyze_txn_results.py
-│   ├── compare_models.py
-│   ├── debug_features.py
-│   ├── debug_ibm_graph.py
-│   ├── fix_scatter.py
-│   ├── setup_phase1.py
-│   ├── test_ablation_quick.py
-│   ├── test_hmsta.py
-│   ├── test_models_quick.py
-│   ├── test_phase1.py
-│   ├── test_real_temporal.py
-│   ├── test_simple_baseline.py
-│   ├── test_temporal_comparison.py
-│   ├── train.py
-│   ├── train_ablation.py
-│   ├── train_ablation_ibm.py
-│   ├── train_ablation_ibm_txn.py
-│   ├── train_hmsta.py
-│   ├── train_mptgnn_ethereum.py
-│   └── train_tgn_ethereum.py
-├── helper/                    # Utility scripts and helper docs
-│   ├── example.py
-│   ├── IMPLEMENTATION_SUMMARY.md
-│   ├── QUICKSTART.md
-│   ├── setup_data.py
-│   └── test_setup.py
-├── results/                   # Results, figures, and reports
-│   ├── baseline_results.md
-│   ├── graphsage_results.md
-│   ├── mlp_results.md
-│   └── figures/
 ├── configs/                   # Configuration files
 │   └── config.yaml
-├── docs/                      # All markdown documentation
-│   ├── ARCHITECTURE_ANALYSIS.md
-│   ├── CHECKLIST.md
-│   ├── DASHBOARD_FULLSTACK.md
-│   ├── DASHBOARD_SETUP.md
-│   ├── FINAL_VALIDATION.md
-│   ├── HMSTA_READY.md
-│   ├── HMSTA_SUMMARY.md
-│   ├── HMSTA_V2_PROGRESS.md
-│   ├── HMSTA_V2_RESULTS.md
-│   ├── NOVELTY_STRATEGY.md
-│   ├── PHASE1_README.md
-│   ├── PHASE1_SUMMARY.md
-│   ├── PROJECT_STATUS.md
-│   ├── QUICKREF.md
-│   ├── README.md
-│   ├── README_INDUSTRIAL.md
-│   ├── ROADMAP.md
-│   ├── ROOT_CAUSE_SUMMARY.md
-│   ├── SOP_vs_REALITY.md
-│   └── TRAINING_GUIDE.md
+└── docs/                      # Documentation
+    ├── DASHBOARD_SETUP.md
+    └── TRAINING_GUIDE.md
 ```
 
-## 📊 Datasets
+## 📊 Dataset
 
-We experiment with three financial fraud datasets of varying scales:
-
-### 1. Ethereum Fraud Dataset (Kaggle)
-- **Source:** [Kaggle - Ethereum Fraud Detection](https://www.kaggle.com/datasets/vagifa/ethereum-frauddetection-dataset)
-- **Scale:** Small-scale, suitable for rapid prototyping
-- **Features:** Transaction graph with binary fraud labels
-- **Status:** ✅ Ready to use
-
-### 2. DGraph (NeurIPS 2022)
-- **Source:** [NeurIPS 2022 Dataset Track](https://dgraph.xinye.com/)
-- **Scale:** ~3M nodes, ~4M edges
-- **Features:** Dynamic financial transaction network with labeled fraudster nodes
-- **Status:** 🔄 To be downloaded
-
-### 3. FiGraph (WWW 2025)
-- **Source:** WWW 2025 Conference
-- **Scale:** ~730K companies, ~1M edges, 9 yearly snapshots
-- **Features:** Heterogeneous financial network with anomaly labels
-- **Status:** 🔄 To be obtained
+### IBM Credit Card Fraud Detection Dataset
+- **Source:** IBM Transactions Dataset
+- **Scale:** 89,757 transactions, 1,527 users
+- **Fraud Ratio:** 33.15% (29,757 fraud, 60,000 non-fraud)
+- **Time Period:** 2019 credit card transactions
+- **Features:** 
+  - User demographics and behavior
+  - Transaction amounts and timestamps
+  - Merchant information (MCC codes, states)
+  - Temporal patterns (hour, day of week)
+- **Graph Construction:**
+  - **Nodes:** 1,527 users (filtered for ≥10 transactions)
+  - **Edges:** 857,732 temporal edges (users active on same day)
+  - **Node Features:** 10 aggregated features per user
+  - **Fraud Labels:** User-level (87.56% fraud users) and transaction-level
+- **Status:** ✅ Loaded and preprocessed
 
 ## 🛠️ Installation
 
 ### Prerequisites
 - Python 3.8+
-- CUDA-capable GPU with ≥16GB VRAM (recommended)
-- 32GB system RAM (for large datasets)
+- Node.js 18+ (for dashboard)
+- CUDA-capable GPU (optional, for faster training)
+- 8GB RAM minimum
 
 ### Setup
 
-1. Clone the repository:
+1. **Clone the repository:**
 ```bash
 git clone https://github.com/KunalSewal/Financial-Fraud-Detection.git
 cd Financial-Fraud-Detection
 ```
 
-2. Create a virtual environment:
+2. **Create Python virtual environment:**
 ```bash
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# On Windows:
+venv\Scripts\activate
+# On Linux/Mac:
+source venv/bin/activate
 ```
 
-3. Install dependencies:
+3. **Install Python dependencies:**
 ```bash
 pip install -r requirements.txt
 ```
 
+4. **Install dashboard dependencies:**
+```bash
+cd dashboard
+npm install
+cd ..
+```
+
 ## 🚀 Quick Start
 
-### Phase 1: Data Exploration
+### 1. Start the Backend API
 ```bash
-jupyter notebook notebooks/01_data_exploration.ipynb
+cd api
+python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### Phase 2: Baseline Models
+The API will:
+- Load the IBM dataset (89,757 transactions)
+- Build the temporal graph (1,527 nodes, 857,732 edges)
+- Register 5 trained models
+- Serve endpoints at `http://localhost:8000`
+
+### 2. Start the Dashboard
 ```bash
-jupyter notebook notebooks/02_baseline_models.ipynb
+cd dashboard
+npm run dev
 ```
 
-### Phase 3: Temporal Models (Coming Soon)
+Open `http://localhost:3000` to access the dashboard.
+
+### 3. Explore the System
+
+**Dashboard Features:**
+- 📊 **Analytics:** ROC curves, confusion matrices, model comparison
+- 🔴 **Live Monitoring:** Simulated transaction stream with fraud detection
+- 🕸️ **Graph Visualization:** Interactive 2D network with fraud communities
+- 🧪 **Experiments:** Training history and performance metrics
+- 🔒 **Security:** System health and API status
+
+### 4. Train Models (Optional)
+
 ```bash
-jupyter notebook notebooks/03_temporal_models.ipynb
+# Train TGN model
+python scripts/train_tgn_fraud.py
+
+# Train TGAT model
+python scripts/train_tgat_fraud.py
+
+# Compare all models
+python scripts/compare_models.py
 ```
 
-## 🔬 Models
+## 🔬 Models & Results
 
-### Baseline Models
-- **MLP Classifier:** Simple feedforward network on node features
-- **GraphSAGE:** Static graph neural network baseline
+### Implemented Models
 
-### Temporal Models
-- **TGN (Rossi et al., ICML 2020):** Temporal Graph Network with memory modules
-- **TGN-ATT (Kim et al., AAAI 2024):** Enhanced TGN for anomaly detection
-- **MPTGNN (Saldaña-Ulloa et al., 2024):** Multi-path temporal GNN
-- **TGAT (Xu et al., ICLR 2020):** Temporal Graph Attention Network
-- **DyRep (Trivedi et al., ICLR 2019):** Dynamic representation learning
-- **EvolveGCN:** Evolving graph convolutional networks
+1. **Baseline GNN**
+   - Static graph neural network
+   - Results: 69.10% AUC, 67.52% Accuracy
 
-## 📈 Evaluation Metrics
+2. **TGAT (Temporal Graph Attention Network)**
+   - Attention-based temporal aggregation
+   - Results: 68.23% AUC, 71.68% Accuracy, 31.35% Recall
 
-- Precision, Recall, F1-Score
-- ROC-AUC
-- Average Precision (AP)
-- Confusion Matrix
-- Training/Validation Loss Curves
+3. **TGN (Temporal Graph Network)**
+   - Memory module for temporal patterns
+   - Results: 68.41% AUC, 71.64% Accuracy, 26.97% Recall
 
-## 🎯 Current Progress
+4. **Weighted Ensemble** ⭐ **BEST MODEL**
+   - 35% TGN + 65% TGAT
+   - Results: **74.78% AUC**, 71.98% Accuracy, 27.65% Recall
 
-- [x] Project setup and repository structure
-- [x] Dataset identification and download instructions
-- [ ] Data exploration and preprocessing
-- [ ] MLP baseline implementation
-- [ ] GraphSAGE baseline implementation
-- [ ] TGN implementation
-- [ ] Full model comparison
-- [ ] Final report and demo
+5. **Voting Ensemble**
+   - Majority voting across models
+   - Results: 66.49% AUC, 72.42% Accuracy, 27.16% Recall
+
+### Performance Summary
+
+| Model | Accuracy | Precision | Recall | F1-Score | ROC-AUC |
+|-------|----------|-----------|--------|----------|----------|
+| Baseline GNN | 67.52% | 70.99% | 3.52% | 6.70% | 69.10% |
+| TGAT | 71.68% | 69.26% | 31.35% | 42.06% | 68.23% |
+| TGN | 71.64% | 70.20% | 26.97% | 39.55% | 68.41% |
+| **Weighted Ensemble** | **71.98%** | **69.44%** | **27.65%** | **39.55%** | **74.78%** |
+| Voting Ensemble | 72.42% | 72.36% | 27.16% | 39.49% | 66.49% |
+
+See `results/Final_Results.md` for detailed metrics.
+
+## 📈 Key Insights
+
+- **Ensemble methods outperform individual models** - Weighted ensemble achieves 74.78% AUC
+- **Low recall across all models** (27-31%) - Challenging imbalanced dataset
+- **High precision** (69-72%) - Models are conservative in fraud predictions
+- **Temporal models show improvement** over static GNN baseline
+
+## 🎯 Project Status
+
+### Completed ✅
+- [x] Dataset acquisition and preprocessing (IBM fraud dataset)
+- [x] Temporal graph construction (857K edges from 89K transactions)
+- [x] Baseline GNN implementation and training
+- [x] TGAT implementation and training
+- [x] TGN implementation and training
+- [x] Ensemble methods (weighted + voting)
+- [x] Full model comparison and evaluation
+- [x] FastAPI backend with fraud detection endpoints
+- [x] Next.js dashboard with real-time monitoring
+- [x] Interactive graph visualization (2D force-directed)
+- [x] Model analytics and performance comparison
+- [x] Complete documentation and README
 
 ## 📚 References
 
@@ -219,4 +263,4 @@ This is a course project. For collaboration, please contact the team members.
 
 ---
 
-**Last Updated:** October 2025
+**Last Updated:** 14th Nov 2025

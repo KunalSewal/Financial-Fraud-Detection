@@ -81,7 +81,7 @@ export default function MonitoringPage() {
   return (
     <DashboardLayout>
       <div className="space-y-8">
-        <PageHeader title="Live Monitoring" description="Real-time transaction stream with fraud detection" breadcrumbs={[{ label: 'Live Monitoring' }]} actions={actions} />
+        <PageHeader title="Live Monitoring" description="Simulated transaction stream from IBM dataset (rotating random samples)" breadcrumbs={[{ label: 'Live Monitoring' }]} actions={actions} />
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="card">
           <h3 className="text-sm text-muted-foreground mb-1">Total</h3>

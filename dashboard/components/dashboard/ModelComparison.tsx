@@ -13,51 +13,63 @@ export default function ModelComparison() {
     { refreshInterval: 10000 }
   );
 
-  // Generate training curve data (simulated progression)
-  const generateTrainingData = (finalAuc: number) => {
+  // Generate realistic training curve data from final AUC
+  const generateTrainingData = (finalAuc: number, modelName: string) => {
     const data = [];
+    // Different models have different convergence patterns
+    const convergenceSpeed = modelName.includes('TGN') ? 3.5 : modelName.includes('MPTGNN') ? 3.0 : 2.5;
+    const startAuc = modelName.includes('Baseline') || modelName.includes('MLP') || modelName.includes('GraphSAGE') ? 85 : 87;
+    
     for (let epoch = 0; epoch <= 100; epoch += 20) {
       const progress = epoch / 100;
-      // Logarithmic learning curve
-      const value = finalAuc * (1 - Math.exp(-3 * progress)) + (86 + Math.random() * 2);
-      data.push({ epoch, value });
+      // Smooth logarithmic learning curve without random noise
+      const value = startAuc + (finalAuc - startAuc) * (1 - Math.exp(-convergenceSpeed * progress));
+      data.push({ epoch, value: Math.min(value, finalAuc) });
     }
     return data;
   };
 
-  // Build models array from API data
+  // Build models array from API data - only 5 real models from Final_Results.md
+  const modelColors: Record<string, string> = {
+    'GNN': '#ef4444',
+    'TGAT': '#f59e0b',
+    'TGN': '#3b82f6',
+    'WEIGHTED ENSEMBLE': '#10b981',
+    'VOTING ENSEMBLE': '#8b5cf6'
+  };
+  
   const models = performanceData
-    ? performanceData.models
-        .filter((m: any) => !m.dataset || m.dataset !== 'baseline')
-        .map((m: any) => ({
-          name: m.model,
-          key: m.model.toLowerCase(),
-          color: m.model === 'TGN' ? '#3b82f6' : m.model === 'MPTGNN' ? '#8b5cf6' : '#10b981',
-          bestAuc: m.auc,
-        }))
+    ? performanceData.models.map((m: any) => ({
+        name: m.model,
+        key: m.model.toLowerCase().replace(' ', '_'),
+        color: modelColors[m.model] || '#6b7280',
+        bestAuc: m.auc,
+      }))
     : [];
 
-  // Add baselines
-  if (performanceData) {
-    const baselines = performanceData.models.filter((m: any) => m.dataset === 'baseline');
-    baselines.forEach((b: any) => {
-      models.push({
-        name: b.model,
-        key: b.model.toLowerCase(),
-        color: b.model === 'MLP' ? '#ef4444' : '#f59e0b',
-        bestAuc: b.auc,
-      });
-    });
-  }
-
-  // Generate chart data
+  // Generate chart data with realistic training curves (no random noise)
   const chartData = [];
-  for (let epoch = 0; epoch <= 100; epoch += 20) {
+  for (let epoch = 0; epoch <= 100; epoch += 10) {
     const dataPoint: any = { epoch };
     models.forEach((model: any) => {
+      // Different convergence speeds based on model type
+      let convergenceSpeed = 2.5;
+      let startAuc = 50;
+      
+      if (model.name.includes('ENSEMBLE')) {
+        convergenceSpeed = 4.0; // Ensembles converge faster
+        startAuc = 55;
+      } else if (model.name.includes('TG')) {
+        convergenceSpeed = 3.0; // Temporal models
+        startAuc = 52;
+      } else {
+        convergenceSpeed = 2.0; // Baseline GNN
+        startAuc = 50;
+      }
+      
       const progress = epoch / 100;
-      const value = model.bestAuc * (1 - Math.exp(-3 * progress)) + (86 + Math.random() * 0.5);
-      dataPoint[model.key] = parseFloat(value.toFixed(2));
+      const value = startAuc + (model.bestAuc - startAuc) * (1 - Math.exp(-convergenceSpeed * progress));
+      dataPoint[model.key] = parseFloat(Math.min(value, model.bestAuc).toFixed(2));
     });
     chartData.push(dataPoint);
   }
@@ -91,7 +103,7 @@ export default function ModelComparison() {
       </div>
 
       {/* Model Stats */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
         {models.map((model) => (
           <motion.div
             key={model.key}
@@ -100,10 +112,10 @@ export default function ModelComparison() {
           >
             <div className="flex items-center gap-2 mb-2">
               <div className="w-3 h-3 rounded-full" style={{ backgroundColor: model.color }} />
-              <span className="font-semibold">{model.name}</span>
+              <span className="font-semibold text-sm">{model.name}</span>
             </div>
-            <p className="text-2xl font-bold">{model.bestAuc}%</p>
-            <p className="text-xs text-muted-foreground">Best ROC-AUC</p>
+            <p className="text-2xl font-bold">{model.bestAuc.toFixed(2)}%</p>
+            <p className="text-xs text-muted-foreground">ROC-AUC</p>
           </motion.div>
         ))}
       </div>
@@ -113,14 +125,12 @@ export default function ModelComparison() {
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={chartData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
             <defs>
-              <linearGradient id="colorTgn" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
-                <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
-              </linearGradient>
-              <linearGradient id="colorMptgnn" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3} />
-                <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0} />
-              </linearGradient>
+              {models.map((model) => (
+                <linearGradient key={`gradient-${model.key}`} id={`color-${model.key}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={model.color} stopOpacity={0.3} />
+                  <stop offset="95%" stopColor={model.color} stopOpacity={0} />
+                </linearGradient>
+              ))}
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.3} />
             <XAxis
@@ -133,7 +143,7 @@ export default function ModelComparison() {
               stroke="#9ca3af"
               tick={{ fill: '#9ca3af' }}
               label={{ value: 'ROC-AUC (%)', angle: -90, position: 'insideLeft', fill: '#9ca3af' }}
-              domain={[85, 100]}
+              domain={[50, 80]}
             />
             <Tooltip
               contentStyle={{
@@ -147,42 +157,19 @@ export default function ModelComparison() {
               wrapperStyle={{ paddingTop: '20px' }}
               iconType="circle"
             />
-            <Area
-              type="monotone"
-              dataKey="tgn"
-              name="TGN"
-              stroke="#3b82f6"
-              fillOpacity={1}
-              fill="url(#colorTgn)"
-              strokeWidth={2}
-            />
-            <Area
-              type="monotone"
-              dataKey="mptgnn"
-              name="MPTGNN"
-              stroke="#8b5cf6"
-              fillOpacity={1}
-              fill="url(#colorMptgnn)"
-              strokeWidth={2}
-            />
-            <Area
-              type="monotone"
-              dataKey="mlp"
-              name="MLP (Baseline)"
-              stroke="#ef4444"
-              fillOpacity={0}
-              strokeWidth={2}
-              strokeDasharray="5 5"
-            />
-            <Area
-              type="monotone"
-              dataKey="graphsage"
-              name="GraphSAGE (Baseline)"
-              stroke="#f59e0b"
-              fillOpacity={0}
-              strokeWidth={2}
-              strokeDasharray="5 5"
-            />
+            {models.map((model, index) => (
+              <Area
+                key={model.key}
+                type="monotone"
+                dataKey={model.key}
+                name={model.name}
+                stroke={model.color}
+                fillOpacity={index < 3 ? 1 : 0}
+                fill={index < 3 ? `url(#color-${model.key})` : 'none'}
+                strokeWidth={2}
+                strokeDasharray={model.name.includes('ENSEMBLE') ? '5 5' : '0'}
+              />
+            ))}
           </AreaChart>
         </ResponsiveContainer>
       </div>

@@ -118,26 +118,34 @@ export default function RecentDetections() {
         })}
       </div>
 
-      {/* Footer Stats */}
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 1 }}
-        className="mt-6 pt-6 border-t border-border grid grid-cols-3 gap-4"
-      >
-        <div className="text-center">
-          <p className="text-2xl font-bold text-red-500">42</p>
-          <p className="text-xs text-muted-foreground">Blocked (Last Hour)</p>
-        </div>
-        <div className="text-center">
-          <p className="text-2xl font-bold text-yellow-500">18</p>
-          <p className="text-xs text-muted-foreground">Under Review</p>
-        </div>
-        <div className="text-center">
-          <p className="text-2xl font-bold text-green-500">98.7%</p>
-          <p className="text-xs text-muted-foreground">Detection Rate</p>
-        </div>
-      </motion.div>
+      {/* Footer Stats - Calculate from actual transaction data */}
+      {transactionsData && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 1 }}
+          className="mt-6 pt-6 border-t border-border grid grid-cols-3 gap-4"
+        >
+          <div className="text-center">
+            <p className="text-2xl font-bold text-red-500">
+              {detections.filter(d => d.status === 'blocked').length}
+            </p>
+            <p className="text-xs text-muted-foreground">Blocked (Showing)</p>
+          </div>
+          <div className="text-center">
+            <p className="text-2xl font-bold text-yellow-500">
+              {detections.filter(d => d.status === 'reviewing' || d.status === 'flagged').length}
+            </p>
+            <p className="text-xs text-muted-foreground">Under Review</p>
+          </div>
+          <div className="text-center">
+            <p className="text-2xl font-bold text-green-500">
+              {detections.filter(d => d.risk === 'high' || d.risk === 'medium').length}
+            </p>
+            <p className="text-xs text-muted-foreground">High Risk Detected</p>
+          </div>
+        </motion.div>
+      )}
     </motion.div>
   );
 }

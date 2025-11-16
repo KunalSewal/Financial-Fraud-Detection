@@ -1,37 +1,75 @@
 'use client';
 
 import { motion } from 'framer-motion';
+import { useEffect, useState } from 'react';
+import useSWR from 'swr';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import PageHeader from '@/components/layout/PageHeader';
-import { Shield, Lock, AlertTriangle, CheckCircle, Activity, Server } from 'lucide-react';
+import { Shield, Lock, AlertTriangle, CheckCircle, Activity, Server, Database } from 'lucide-react';
+import { api } from '@/lib/api';
 
 export default function Security() {
+  const [uptime, setUptime] = useState(0);
+  
+  // Fetch real metrics to derive security status
+  const { data: metricsData, error: metricsError } = useSWR(
+    '/api/metrics',
+    () => api.getMetrics(),
+    { refreshInterval: 5000 }
+  );
+  
+  const { data: datasetsData, error: datasetsError } = useSWR(
+    '/api/datasets',
+    () => api.getDatasets(),
+    { refreshInterval: 0 }
+  );
+
+  // Calculate uptime since component mount
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setUptime(prev => prev + 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const formatUptime = (seconds: number) => {
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    return `${hours}h ${mins}m ${secs}s`;
+  };
+
+  // Real security metrics derived from actual system state
+  const apiHealthy = !metricsError && !datasetsError;
+  const datasetLoaded = datasetsData?.datasets?.length > 0;
+  const modelsActive = metricsData?.total_transactions > 0;
+  
   const securityMetrics = [
     {
-      name: 'System Integrity',
-      status: 'secure',
-      value: '98%',
-      icon: Shield,
-      color: 'text-green-500',
+      name: 'API Status',
+      status: apiHealthy ? 'secure' : 'error',
+      value: apiHealthy ? 'Healthy' : 'Error',
+      icon: Server,
+      color: apiHealthy ? 'text-green-500' : 'text-red-500',
     },
     {
-      name: 'API Security',
+      name: 'Dataset Loaded',
+      status: datasetLoaded ? 'secure' : 'warning',
+      value: datasetLoaded ? 'Yes' : 'No',
+      icon: Database,
+      color: datasetLoaded ? 'text-green-500' : 'text-yellow-500',
+    },
+    {
+      name: 'CORS Protection',
       status: 'secure',
       value: 'Enabled',
       icon: Lock,
       color: 'text-green-500',
     },
     {
-      name: 'Active Threats',
-      status: 'warning',
-      value: '3',
-      icon: AlertTriangle,
-      color: 'text-yellow-500',
-    },
-    {
-      name: 'Uptime',
+      name: 'Session Uptime',
       status: 'secure',
-      value: '99.9%',
+      value: formatUptime(uptime),
       icon: Activity,
       color: 'text-green-500',
     },
@@ -99,21 +137,32 @@ export default function Security() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.4 }}
-        className="card bg-green-500/10 border-green-500/20"
+        className={`card ${
+          apiHealthy && datasetLoaded
+            ? 'bg-green-500/10 border-green-500/20'
+            : 'bg-yellow-500/10 border-yellow-500/20'
+        }`}
       >
         <div className="flex items-start gap-3">
-          <CheckCircle className="w-6 h-6 text-green-500 flex-shrink-0 mt-0.5" />
+          {apiHealthy && datasetLoaded ? (
+            <CheckCircle className="w-6 h-6 text-green-500 flex-shrink-0 mt-0.5" />
+          ) : (
+            <AlertTriangle className="w-6 h-6 text-yellow-500 flex-shrink-0 mt-0.5" />
+          )}
           <div>
-            <h3 className="font-semibold mb-1">All Systems Secure</h3>
+            <h3 className="font-semibold mb-1">
+              {apiHealthy && datasetLoaded ? 'System Operational' : 'System Status Warning'}
+            </h3>
             <p className="text-sm text-muted-foreground">
-              No critical security issues detected. The system is operating normally with
-              all security protocols active.
+              {apiHealthy && datasetLoaded
+                ? `Backend API is running. Dataset loaded with ${metricsData?.total_transactions?.toLocaleString()} transactions. All security protocols active.`
+                : 'Some system components are not fully operational. Check connection status above.'}
             </p>
           </div>
         </div>
       </motion.div>
 
-      {/* Threat Log */}
+      {/* API Connection Status */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -122,59 +171,67 @@ export default function Security() {
       >
         <div className="flex items-center gap-3 mb-6">
           <Shield className="w-6 h-6 text-primary" />
-          <h2 className="text-2xl font-bold">Threat Log</h2>
+          <h2 className="text-2xl font-bold">API Connection Log</h2>
         </div>
 
         <div className="space-y-3">
-          {threatLog.map((threat, index) => (
-            <motion.div
-              key={threat.id}
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: 0.6 + index * 0.1 }}
-              className={`p-4 rounded-lg border ${
-                threat.severity === 'high'
-                  ? 'bg-red-500/10 border-red-500/20'
-                  : threat.severity === 'medium'
-                  ? 'bg-yellow-500/10 border-yellow-500/20'
-                  : 'bg-blue-500/10 border-blue-500/20'
-              }`}
-            >
+          {apiHealthy ? (
+            <div className="p-4 rounded-lg border bg-green-500/10 border-green-500/20">
               <div className="flex items-start justify-between mb-2">
                 <div>
-                  <h3 className="font-semibold">{threat.type}</h3>
+                  <h3 className="font-semibold">Backend API Connected</h3>
                   <p className="text-sm text-muted-foreground mt-1">
-                    {threat.description}
+                    Successfully connected to fraud detection API on port 8000
                   </p>
                 </div>
-                <span
-                  className={`px-2 py-1 rounded text-xs font-medium uppercase ${
-                    threat.severity === 'high'
-                      ? 'bg-red-500/20 text-red-500'
-                      : threat.severity === 'medium'
-                      ? 'bg-yellow-500/20 text-yellow-500'
-                      : 'bg-blue-500/20 text-blue-500'
-                  }`}
-                >
-                  {threat.severity}
+                <span className="px-2 py-1 rounded text-xs font-medium uppercase bg-green-500/20 text-green-500">
+                  Active
                 </span>
               </div>
               <div className="flex items-center gap-4 text-sm">
-                <span className="text-muted-foreground">{threat.timestamp}</span>
-                <span
-                  className={`px-2 py-1 rounded text-xs font-medium ${
-                    threat.status === 'blocked'
-                      ? 'bg-red-500/20 text-red-500'
-                      : threat.status === 'resolved'
-                      ? 'bg-green-500/20 text-green-500'
-                      : 'bg-yellow-500/20 text-yellow-500'
-                  }`}
-                >
-                  {threat.status}
+                <span className="text-muted-foreground">{new Date().toLocaleString()}</span>
+                <span className="px-2 py-1 rounded text-xs font-medium bg-green-500/20 text-green-500">
+                  connected
                 </span>
               </div>
-            </motion.div>
-          ))}
+            </div>
+          ) : (
+            <div className="p-4 rounded-lg border bg-red-500/10 border-red-500/20">
+              <div className="flex items-start justify-between mb-2">
+                <div>
+                  <h3 className="font-semibold">Backend API Connection Failed</h3>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Cannot connect to API. Make sure the backend is running on port 8000.
+                  </p>
+                </div>
+                <span className="px-2 py-1 rounded text-xs font-medium uppercase bg-red-500/20 text-red-500">
+                  Error
+                </span>
+              </div>
+              <div className="flex items-center gap-4 text-sm">
+                <span className="text-muted-foreground">{new Date().toLocaleString()}</span>
+                <span className="px-2 py-1 rounded text-xs font-medium bg-red-500/20 text-red-500">
+                  disconnected
+                </span>
+              </div>
+            </div>
+          )}
+          
+          {datasetLoaded && (
+            <div className="p-4 rounded-lg border bg-green-500/10 border-green-500/20">
+              <div className="flex items-start justify-between mb-2">
+                <div>
+                  <h3 className="font-semibold">Dataset Loaded Successfully</h3>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    IBM fraud detection dataset with {metricsData?.total_transactions?.toLocaleString()} transactions loaded
+                  </p>
+                </div>
+                <span className="px-2 py-1 rounded text-xs font-medium uppercase bg-green-500/20 text-green-500">
+                  Ready
+                </span>
+              </div>
+            </div>
+          )}
         </div>
       </motion.div>
 

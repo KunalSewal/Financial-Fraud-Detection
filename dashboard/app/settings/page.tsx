@@ -9,7 +9,7 @@ import { api, Dataset } from '@/lib/api';
 import { Settings as SettingsIcon, Database, Save, RefreshCcw, CheckCircle } from 'lucide-react';
 
 export default function Settings() {
-  const [activeDataset, setActiveDataset] = useState('ethereum');
+  const [activeDataset, setActiveDataset] = useState('ibm');
   const [isSwitching, setIsSwitching] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
 
@@ -92,9 +92,9 @@ export default function Settings() {
                         {dataset.name}
                       </h3>
                       <p className="text-sm text-muted-foreground">
-                        {dataset.name === 'ethereum'
-                          ? 'Ethereum phishing transaction dataset'
-                          : 'DGraph financial fraud dataset'}
+                        {dataset.name === 'ibm'
+                          ? 'IBM Credit Card Fraud Dataset (89,757 transactions, 33% fraud rate)'
+                          : 'Unknown dataset'}
                       </p>
                     </div>
                     {activeDataset === dataset.name && (

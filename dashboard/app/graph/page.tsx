@@ -31,7 +31,7 @@ type ViewMode = 'overview' | 'communities' | 'ego';
 export default function GraphVisualization() {
   const [viewMode, setViewMode] = useState<ViewMode>('overview');
   const [selectedNode, setSelectedNode] = useState<number | null>(null);
-  const [sampleSize, setSampleSize] = useState(500);
+  const [sampleSize, setSampleSize] = useState(200);
   const [searchNodeId, setSearchNodeId] = useState('');
   const graphRef = useRef<any>();
 
@@ -297,13 +297,17 @@ export default function GraphVisualization() {
                   </label>
                   <input
                     type="range"
-                    min="100"
-                    max="2000"
-                    step="100"
+                    min="50"
+                    max="500"
+                    step="50"
                     value={sampleSize}
                     onChange={(e) => setSampleSize(parseInt(e.target.value))}
                     className="w-full"
                   />
+                  <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                    <span>50 (sparse)</span>
+                    <span>500 (dense)</span>
+                  </div>
                 </div>
               </div>
             </div>
