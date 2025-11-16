@@ -477,16 +477,18 @@ if __name__ == "__main__":
     # Initialize TGN memory (needed if not saved in checkpoint)
     initialize_tgn_memory(tgn_model, events, device)
     
-    # Load/Initialize TGAT model
-    # NOTE: TGAT_fraud.py doesn't save model - you need to train it first
-    # or modify TGAT_fraud.py to save the model
-    tgat_model, tgat_neigh_finder = load_tgat_model(events, num_nodes, 
-                                                     node_features.shape[1], device)
+    # Load TGAT model
+    tgat_model_path = "saved_models/tgat_fraud_best.pt"
+    tgat_model, tgat_neigh_finder = load_tgat_model(
+        model_path=tgat_model_path,
+        events=events,
+        num_nodes=num_nodes,
+        node_feat_dim=node_features.shape[1],
+        device=device
+    )
     
     print(f"\n{'='*60}")
-    print(f"⚠  WARNING: TGAT model is UNTRAINED!")
-    print(f"   Run TGAT_fraud.py first and modify it to save the model.")
-    print(f"   For demonstration, proceeding with untrained TGAT...")
+    print(f"BOTH MODELS LOADED SUCCESSFULLY!")
     print(f"{'='*60}")
     
     # Evaluate ensemble with different methods
@@ -511,7 +513,7 @@ if __name__ == "__main__":
             )
     
     print("\n✓ Ensemble evaluation complete!")
-    print("\nTo use trained TGAT:")
-    print("1. Add model saving to TGAT_fraud.py (like TGN does)")
-    print("2. Train TGAT: python TGAT_fraud.py")
-    print("3. Modify load_tgat_model() to load the saved checkpoint")
+    print("\nEnsemble Methods Summary:")
+    print("  - Average: Simple 50-50 average of probabilities")
+    print("  - Weighted: 60% TGN + 40% TGAT (adjust based on validation)")
+    print("  - Voting: Majority vote with confidence-based tiebreaker")
