@@ -227,19 +227,30 @@ def load_tgat_model(model_path: str, events: List[Tuple], num_nodes: int,
         raise FileNotFoundError(f"TGAT model not found at {model_path}")
     
     checkpoint = torch.load(model_path, map_location=device)
-    config = checkpoint['tgat_config']
+    config = checkpoint.get('tgat_config', {})
+    
+    # Get config values with proper defaults (matching TGAT_fraud.py)
+    time_dim = config.get('time_dim') or 50
+    embed_dim = config.get('embed_dim') or 100
+    n_layers = config.get('n_layers') or 2
+    n_heads = config.get('n_heads') or 2
+    dropout = config.get('dropout')
+    if dropout is None:
+        dropout = 0.1
+    
+    print(f"  TGAT config: time_dim={time_dim}, embed_dim={embed_dim}, n_layers={n_layers}, n_heads={n_heads}")
     
     # Initialize TGAT
     tgat = TGATModel(
         node_feat_dim=node_feat_dim,
-        time_enc_dim=config.get('time_dim', 50),
-        embed_dim=config.get('embed_dim', 100),
-        n_layers=config.get('n_layers', 2),
-        n_heads=config.get('n_heads', 2),
-        dropout=config.get('dropout', 0.1)
+        time_enc_dim=time_dim,
+        embed_dim=embed_dim,
+        n_layers=n_layers,
+        n_heads=n_heads,
+        dropout=dropout
     )
     
-    model = TGATFraudClassifier(tgat, embed_dim=config.get('embed_dim', 100), 
+    model = TGATFraudClassifier(tgat, embed_dim=embed_dim, 
                                 node_feat_dim=node_feat_dim, device=device)
     model.load_state_dict(checkpoint['model_state_dict'])
     model = model.to(device)
@@ -447,6 +458,9 @@ if __name__ == "__main__":
     csv_path = "data/ibm/ibm_fraud_29k_nonfraud_60k.csv"
     events, node_features, labels, num_nodes = load_ibm_temporal_data(csv_path)
     
+    # Move node features to device
+    node_features = node_features.to(device)
+    
     # Create splits
     all_indices = np.arange(num_nodes)
     train_idx, test_val_idx = train_test_split(
@@ -477,7 +491,7 @@ if __name__ == "__main__":
     # Initialize TGN memory (needed if not saved in checkpoint)
     initialize_tgn_memory(tgn_model, events, device)
     
-    # Load TGAT model
+    # Load TGAT model with explicit keyword arguments
     tgat_model_path = "saved_models/tgat_fraud_best.pt"
     tgat_model, tgat_neigh_finder = load_tgat_model(
         model_path=tgat_model_path,
@@ -496,13 +510,12 @@ if __name__ == "__main__":
     
     for method in methods:
         if method == 'weighted':
-            # Set weights based on individual model performance
-            # For demo: assume TGN performs better (0.6 vs 0.4)
-            # In practice, get these from validation set
+            # Set weights: 35% TGN + 65% TGAT
+            # TGAT gets more weight as it performs better
             evaluate_ensemble(
                 tgn_model, tgat_model, node_features, tgat_neigh_finder,
                 labels, test_mask, method=method,
-                tgn_weight=0.6, tgat_weight=0.4,
+                tgn_weight=0.35, tgat_weight=0.65,
                 batch_size=8192, device=device
             )
         else:
@@ -515,5 +528,5 @@ if __name__ == "__main__":
     print("\n✓ Ensemble evaluation complete!")
     print("\nEnsemble Methods Summary:")
     print("  - Average: Simple 50-50 average of probabilities")
-    print("  - Weighted: 60% TGN + 40% TGAT (adjust based on validation)")
+    print("  - Weighted: 35% TGN + 65% TGAT (TGAT weighted higher)")
     print("  - Voting: Majority vote with confidence-based tiebreaker")

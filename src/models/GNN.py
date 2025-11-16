@@ -276,7 +276,7 @@ if __name__ == "__main__":
     print(f"  Test:  {data.y[test_mask].sum().item():,} fraud / {test_mask.sum().item():,} total ({data.y[test_mask].float().mean()*100:.2f}%)")
     
     # Train model
-    model = train_gnn(data, train_mask, val_mask, epochs=25, lr=0.01, hidden_dim=64)
+    model = train_gnn(data, train_mask, val_mask, epochs=20, lr=0.01, hidden_dim=64)
     
     # Evaluate on test set
     results = evaluate_gnn(model, data, test_mask)
