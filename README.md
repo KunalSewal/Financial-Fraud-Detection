@@ -21,24 +21,75 @@ This project explores the application of Temporal Graph Neural Networks (TGNNs) 
 Financial-Fraud-Detection/
 ├── README.md
 ├── requirements.txt
-├── data/
-│   ├── README.md              # Dataset download instructions
-│   └── processed/             # Preprocessed data (gitignored)
-├── notebooks/
+├── data/                      # Raw data, download scripts, preprocessing
+│   ├── transaction_dataset.csv
+│   ├── download_scripts/
+│   └── preprocessing/
+├── notebooks/                 # Jupyter notebooks for exploration/experiments
 │   ├── 01_data_exploration.ipynb
 │   ├── 02_baseline_models.ipynb
 │   └── 03_temporal_models.ipynb
-├── src/
+├── src/                       # Core code (data utils, models, training, evaluation)
 │   ├── __init__.py
-│   ├── data_utils.py          # Data loading and preprocessing
-│   ├── models.py              # Model implementations
-│   ├── train.py               # Training utilities
-│   └── evaluate.py            # Evaluation metrics
-├── results/
+│   ├── data_utils.py
+│   ├── evaluate.py
+│   ├── models.py
+│   └── train.py
+├── scripts/                   # Standalone scripts for training, analysis, etc.
+│   ├── analyze_txn_results.py
+│   ├── compare_models.py
+│   ├── debug_features.py
+│   ├── debug_ibm_graph.py
+│   ├── fix_scatter.py
+│   ├── setup_phase1.py
+│   ├── test_ablation_quick.py
+│   ├── test_hmsta.py
+│   ├── test_models_quick.py
+│   ├── test_phase1.py
+│   ├── test_real_temporal.py
+│   ├── test_simple_baseline.py
+│   ├── test_temporal_comparison.py
+│   ├── train.py
+│   ├── train_ablation.py
+│   ├── train_ablation_ibm.py
+│   ├── train_ablation_ibm_txn.py
+│   ├── train_hmsta.py
+│   ├── train_mptgnn_ethereum.py
+│   └── train_tgn_ethereum.py
+├── helper/                    # Utility scripts and helper docs
+│   ├── example.py
+│   ├── IMPLEMENTATION_SUMMARY.md
+│   ├── QUICKSTART.md
+│   ├── setup_data.py
+│   └── test_setup.py
+├── results/                   # Results, figures, and reports
 │   ├── baseline_results.md
+│   ├── graphsage_results.md
+│   ├── mlp_results.md
 │   └── figures/
-└── configs/
-    └── config.yaml            # Experiment configurations
+├── configs/                   # Configuration files
+│   └── config.yaml
+├── docs/                      # All markdown documentation
+│   ├── ARCHITECTURE_ANALYSIS.md
+│   ├── CHECKLIST.md
+│   ├── DASHBOARD_FULLSTACK.md
+│   ├── DASHBOARD_SETUP.md
+│   ├── FINAL_VALIDATION.md
+│   ├── HMSTA_READY.md
+│   ├── HMSTA_SUMMARY.md
+│   ├── HMSTA_V2_PROGRESS.md
+│   ├── HMSTA_V2_RESULTS.md
+│   ├── NOVELTY_STRATEGY.md
+│   ├── PHASE1_README.md
+│   ├── PHASE1_SUMMARY.md
+│   ├── PROJECT_STATUS.md
+│   ├── QUICKREF.md
+│   ├── README.md
+│   ├── README_INDUSTRIAL.md
+│   ├── ROADMAP.md
+│   ├── ROOT_CAUSE_SUMMARY.md
+│   ├── SOP_vs_REALITY.md
+│   └── TRAINING_GUIDE.md
 ```
 
 ## 📊 Datasets
