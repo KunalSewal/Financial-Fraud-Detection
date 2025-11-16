@@ -258,9 +258,10 @@ This is a course project. For collaboration, please contact the team members.
 
 ## 📧 Contact
 
-- Kunal Sewal: kunal.sewal@example.edu
-- Kesav Patneedi: kesav.patneedi@example.edu
+- Kunal Sewal: kunalsewal@gmail.com
+- Kesav Patneedi: kesavpatneedi@gmail.com
 
 ---
 
 **Last Updated:** 14th Nov 2025
+
