@@ -10,7 +10,6 @@ TGAT - Paper-faithful implementation (PyTorch)
 Notes:
  - Single-file prototype. Not production-optimized but faithful to TGAT design.
  - To use real datasets (Reddit/Wiki), construct `events` as list of (src,dst,ts,edge_feat)
-Author: ChatGPT (GPT-5 Thinking mini)
 """
 
 import math

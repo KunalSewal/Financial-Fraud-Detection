@@ -12,7 +12,6 @@ Assumptions:
  - Nodes are indexed [0..num_nodes-1]
  - Edge features optional; use zeros if not available
 
-Author: ChatGPT (GPT-5 Thinking mini)
 """
 
 import math
