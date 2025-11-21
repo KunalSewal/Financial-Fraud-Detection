@@ -45,6 +45,7 @@ pip_freeze.txt
 !data/**
 data/dgraphfinv2_edge_timestamp.npy
 data/dgraphfinv2_node_timestamp.npy
+data/ibm/card_transaction.v1.csv
 
 # Model checkpoints
 *.pt
