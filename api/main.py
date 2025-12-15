@@ -852,12 +852,13 @@ async def get_graph_structure(sample_size: int = 1000, fraud_boost: float = 5.0)
     }
 
 @app.get("/api/graph/ego-network")
-async def get_ego_network(node_id: int, hops: int = 2):
+async def get_ego_network(node_id: int, hops: int = 2, max_neighbors: int = 50):
     """Get ego network (neighborhood) around a specific node.
     
     Args:
         node_id: Center node ID
         hops: Number of hops from center (1-3)
+        max_neighbors: Maximum number of neighbors to include (default: 50)
     """
     if state.active_dataset not in state.datasets:
         raise HTTPException(status_code=404, detail="No dataset loaded")
@@ -870,7 +871,7 @@ async def get_ego_network(node_id: int, hops: int = 2):
     neighbors = {node_id}
     current_level = {node_id}
     
-    for _ in range(hops):
+    for hop in range(hops):
         next_level = set()
         for node in current_level:
             # Find all edges connected to this node
@@ -881,20 +882,29 @@ async def get_ego_network(node_id: int, hops: int = 2):
             next_level.update(connected_edges[1].tolist())
         neighbors.update(next_level)
         current_level = next_level
-        if len(neighbors) > 500:  # Limit size
+        # Stop early if too many neighbors
+        if len(neighbors) > max_neighbors:
             break
     
-    neighbors = list(neighbors)[:500]
-    nodes_set = set(neighbors)
+    # Limit total neighbors
+    neighbors_list = list(neighbors)
+    if len(neighbors_list) > max_neighbors:
+        # Keep center node + random sample of others
+        other_neighbors = [n for n in neighbors_list if n != node_id]
+        import random
+        sampled = random.sample(other_neighbors, min(max_neighbors - 1, len(other_neighbors)))
+        neighbors_list = [node_id] + sampled
+    
+    nodes_set = set(neighbors_list)
     
     # Get edges between these nodes
-    mask = torch.isin(edge_index[0], torch.tensor(neighbors)) & \
-           torch.isin(edge_index[1], torch.tensor(neighbors))
+    mask = torch.isin(edge_index[0], torch.tensor(neighbors_list)) & \
+           torch.isin(edge_index[1], torch.tensor(neighbors_list))
     edge_index_filtered = edge_index[:, mask]
     
     # Build response
     node_list = []
-    for nid in neighbors:
+    for nid in neighbors_list:
         is_fraud = bool(node_labels[nid].item() == 1) if node_labels is not None and nid < len(node_labels) else False
         node_list.append({
             "id": int(nid),

@@ -32,6 +32,7 @@ export default function GraphVisualization() {
   const [viewMode, setViewMode] = useState<ViewMode>('overview');
   const [selectedNode, setSelectedNode] = useState<number | null>(null);
   const [sampleSize, setSampleSize] = useState(200);
+  const [maxNeighbors, setMaxNeighbors] = useState(50);
   const [searchNodeId, setSearchNodeId] = useState('');
   const graphRef = useRef<any>();
 
@@ -49,10 +50,10 @@ export default function GraphVisualization() {
   );
 
   const { data: egoNetwork, isLoading: egoLoading } = useSWR<EgoNetwork | null>(
-    viewMode === 'ego' && selectedNode ? `/api/graph/ego-network?node=${selectedNode}` : null,
+    viewMode === 'ego' && selectedNode ? `/api/graph/ego-network?node=${selectedNode}&max_neighbors=${maxNeighbors}` : null,
     async () => {
       if (!selectedNode) return null;
-      return api.getEgoNetwork(selectedNode, 2);
+      return api.getEgoNetwork(selectedNode, 2, maxNeighbors);
     },
     { refreshInterval: 0 }
   );
@@ -308,6 +309,35 @@ export default function GraphVisualization() {
                     <span>50 (sparse)</span>
                     <span>500 (dense)</span>
                   </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {viewMode === 'ego' && (
+            <div className="bg-card rounded-lg border border-border p-4">
+              <h3 className="text-lg font-semibold mb-4">Controls</h3>
+              <div className="space-y-4">
+                <div>
+                  <label className="text-sm text-muted-foreground mb-2 block">
+                    Max Neighbors: {maxNeighbors} nodes
+                  </label>
+                  <input
+                    type="range"
+                    min="10"
+                    max="200"
+                    step="10"
+                    value={maxNeighbors}
+                    onChange={(e) => setMaxNeighbors(parseInt(e.target.value))}
+                    className="w-full"
+                  />
+                  <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                    <span>10 (focused)</span>
+                    <span>200 (expanded)</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Lower values reduce clustering and improve visibility
+                  </p>
                 </div>
               </div>
             </div>
