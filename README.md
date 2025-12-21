@@ -1,11 +1,5 @@
 # Temporal Graph Neural Networks for Real-Time Financial Fraud Detection
 
-**Team Name:** GNN-erds  
-**Course:** DSL501 - Machine Learning Project  
-**Team Members:**
-- Kunal Sewal (12341270)
-- Kesav Patneedi (12341130)
-
 ## 📋 Project Overview
 
 This project implements and compares Temporal Graph Neural Networks (TGNNs) for detecting fraudulent transactions in financial networks. We've built a complete end-to-end system including model training, evaluation, and a production-ready real-time dashboard.
@@ -252,16 +246,8 @@ See `results/Final_Results.md` for detailed metrics.
 
 This project is for academic purposes as part of DSL501 coursework.
 
-## 🤝 Contributing
-
-This is a course project. For collaboration, please contact the team members.
-
-## 📧 Contact
-
-- Kunal Sewal: kunalsewal@gmail.com
-- Kesav Patneedi: kesavpatneedi@gmail.com
-
 ---
 
 **Last Updated:** 14th Nov 2025
+
 
